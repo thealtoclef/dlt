@@ -76,8 +76,9 @@ def is_nested_type(
 ) -> bool:
     """For those paths the nested objects should be left in place.
     Cache perf: max_nesting < _r_lvl: ~2x faster, full check 10x faster
-    """
 
+    Note: Columns with x-json-flatten hint should be flattened, not preserved as nested.
+    """
     # nesting level is counted backwards
     # is we have traversed to or beyond the calculated nesting level, we detect a nested type
     if _r_lvl <= 0:
@@ -91,6 +92,10 @@ def is_nested_type(
         data_type = schema.get_preferred_type(field_name)
     else:
         data_type = column["data_type"]
+
+    # If x-json-flatten is set, we want to flatten this column even if data_type is json
+    if column and column.get("x-json-flatten") is not None:
+        return False
 
     return data_type == "json"
 

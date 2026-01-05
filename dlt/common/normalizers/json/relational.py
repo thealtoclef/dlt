@@ -33,6 +33,8 @@ from dlt.common.normalizers.json import (
     TNormalizedRowIterator,
     wrap_in_dict,
     DataItemNormalizer as DataItemNormalizerBase,
+    parse_json_columns,
+    get_json_columns_to_parse,
 )
 from dlt.common.normalizers.json.typing import (
     RelationalNormalizerConfig,
@@ -260,6 +262,11 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         is_root: bool = False,
     ) -> TNormalizedRowIterator:
         table = self._shorten_fragments(*parent_path, *ident_path)
+
+        # Pre-process JSON columns: parse strings to dicts
+        # This must happen BEFORE _flatten so DLT's native flattening can handle the rest
+        dict_row = self._preprocess_json_columns(table, dict_row)
+
         # flatten current row and extract all lists to recur into
         flattened_row, lists = self._flatten(table, dict_row, _r_lvl)
         # always extend row
@@ -292,6 +299,41 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                 row_id,
                 _r_lvl - 1,
             )
+
+    def _preprocess_json_columns(self, table: str, row: DictStrAny) -> DictStrAny:
+        """Pre-process JSON columns: parse strings to dicts before DLT flattening.
+
+        This method checks the table schema for columns with x-json-flatten hints
+        and parses JSON strings to dicts. Supports:
+        - Selective path-based extraction (only specific paths flattened)
+        - Keeping original JSON string alongside flattened columns
+
+        Then DLT's native _flatten() will handle field extraction and type coercion.
+
+        Args:
+            table: Table name
+            row: The input row dict (will be modified in place)
+
+        Returns:
+            The modified row with JSON columns processed
+        """
+        # Get table schema if available
+        try:
+            table_schema = self.schema._schema_tables.get(table)
+            if not table_schema:
+                return row
+        except (AttributeError, KeyError):
+            return row
+
+        # Get columns with JSON flattening hints
+        table_columns = table_schema.get("columns", {})
+        json_columns = get_json_columns_to_parse(table_columns)
+
+        if not json_columns:
+            return row
+
+        # Parse JSON strings to dicts
+        return parse_json_columns(row, json_columns)
 
     def extend_schema(self, extend_tables: bool = True) -> None:
         """Extends Schema with normalizer-specific hints and settings.

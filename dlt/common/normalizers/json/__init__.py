@@ -71,4 +71,13 @@ __all__ = [
     "DataItemNormalizer",
     "SupportsDataItemNormalizer",
     "wrap_in_dict",
+    # JSON expansion
+    "parse_json_columns",
+    "get_json_columns_to_parse",
 ]
+
+# JSON expansion exports
+from dlt.common.normalizers.json.expansion import (
+    parse_json_columns,
+    get_json_columns_to_parse,
+)  # noqa: E402

@@ -59,6 +59,7 @@ dependencies = [
     "sqlglot>=25.4.0,!=28.1",
     "pywin32>=306 ; sys_platform == 'win32'",
     "rich-argparse>=1.6.0",
+    "polars-genson[polars]>=0.7.0",
 ]
 
 [project.optional-dependencies]

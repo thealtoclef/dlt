@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from dlt.common.schema.typing import TColumnName, TypedDict
 
@@ -12,3 +12,4 @@ class RelationalNormalizerConfig(TypedDict, total=False):
     max_nesting: Optional[int]
     propagation: Optional[RelationalNormalizerConfigPropagation]
     root_key_propagation: Optional[bool]
+

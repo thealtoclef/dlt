@@ -132,6 +132,8 @@ _ColumnPropInfos = [
     TColumnPropInfo("dedup_sort", (False, None)),
     # any x- hint with special settings ie. defaults
     TColumnPropInfo("x-active-record-timestamp", (), is_hint=True),  # no default values
+    TColumnPropInfo("x-json-flatten", (None,), is_hint=True),  # JSON field flattening hint
+    TColumnPropInfo("x-json-keep-original", (False,), is_hint=True),  # Keep original JSON string
 ]
 
 ColumnPropInfos: Dict[Union[TColumnProp, str], TColumnPropInfo] = {
