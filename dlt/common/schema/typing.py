@@ -169,6 +169,10 @@ TColumnProcessingHints = TypedDict(
     "TColumnProcessingHints",
     {
         "x-normalizer": Optional[Dict[str, Any]],
+        "x-json-flatten": Optional[Union[bool, List[str]]],
+        "x-json-keep-original": Optional[bool],
+        "x-json-flatten-force-string": Optional[bool],
+        "x-json-flatten-max-depth": Optional[int],
     },
     total=False,
 )

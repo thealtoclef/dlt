@@ -2,7 +2,7 @@
 Cached helper methods for all operations that are called often
 """
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union, cast
 
 from dlt.common.json import json
 from dlt.common.destination.utils import resolve_merge_strategy
@@ -26,6 +26,15 @@ from dlt.common.schema.utils import (
     is_nested_table,
 )
 from dlt.common.utils import digest128, digest128b
+
+
+class TJsonColumnExpansionSpec(NamedTuple):
+    """Per-column configuration for JSON expansion hints."""
+
+    flatten_spec: Optional[Union[bool, List[str]]]
+    keep_original: bool
+    force_string: bool
+    max_depth: Optional[int]
 
 
 def shorten_fragments(naming: NamingConvention, *idents: str) -> str:
@@ -87,6 +96,14 @@ def is_nested_type(
     table = schema.tables.get(table_name)
     if table:
         column = table["columns"].get(field_name)
+
+    # JSON expansion hints are handled in the expansion layer, not by nested-type detection.
+    # Only bypass when a hint is actually enabled (truthy) — explicit False must not interfere.
+    if column is not None and (
+        column.get("x-json-flatten") or column.get("x-json-keep-original")
+    ):
+        return False
+
     if column is None or "data_type" not in column:
         data_type = schema.get_preferred_type(field_name)
     else:
@@ -156,6 +173,29 @@ def requires_root_key(
         has_column_with_prop(t, "root_key", include_incomplete=True)
         for t in get_nested_tables(schema.tables, table_name)
     )
+
+
+def get_json_expansion_columns(
+    schema: Schema, table_name: str
+) -> Dict[str, TJsonColumnExpansionSpec]:
+    """Return expansion config for columns with x-json-* hints in `table_name`.
+
+    Returns an empty dict when no such columns exist or the table is not in the schema.
+    """
+    table = schema.tables.get(table_name)
+    if not table:
+        return {}
+    result: Dict[str, TJsonColumnExpansionSpec] = {}
+    for col_name, col in table["columns"].items():
+        flatten_spec: Optional[Union[bool, List[str]]] = col.get("x-json-flatten")
+        keep_original: bool = bool(col.get("x-json-keep-original"))
+        force_string: bool = bool(col.get("x-json-flatten-force-string"))
+        max_depth: Optional[int] = col.get("x-json-flatten-max-depth")
+        if flatten_spec or keep_original:
+            result[col_name] = TJsonColumnExpansionSpec(
+                flatten_spec, keep_original, force_string, max_depth
+            )
+    return result
 
 
 def get_row_hash(row: Dict[str, Any], subset: Optional[List[str]] = None) -> str:

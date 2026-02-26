@@ -16,6 +16,7 @@ from dlt.common.data_types.type_helpers import (
     PY_TYPE_TO_SC_TYPE,
     _COERCE_DISPATCH,
     coerce_value,
+    json_to_str,
     py_type_to_sc_type,
 )
 from dlt.common.data_types.typing import TDataType
@@ -52,6 +53,7 @@ from dlt.common.normalizers.json.helpers import (
     get_row_hash,
     requires_root_key,
 )
+from dlt.common.normalizers.json.expansion import expand_json_column
 from dlt.common.validation import validate_dict
 
 
@@ -130,6 +132,9 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         )
         self._should_be_nested = lru_cache(maxsize=None)(
             partial(normalize_helpers.should_be_nested, self.schema)
+        )
+        self._get_json_expansion_columns = lru_cache(maxsize=None)(
+            partial(normalize_helpers.get_json_expansion_columns, self.schema)
         )
         self._get_propagation_mapping = (
             lru_cache(maxsize=None)(partial(get_propagation_mapping, self.propagation_config))
@@ -284,8 +289,41 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         is_root: bool = False,
     ) -> TNormalizedRowIterator:
         table = self._shorten_fragments(*parent_path, *ident_path)
+
+        # apply JSON expansion hints before running the standard flattening logic
+        originals_to_inject: DictStrAny = {}
+        json_expansion_cols = self._get_json_expansion_columns(table)
+        if json_expansion_cols:
+            expanded_row = dict_row.copy()
+            for column_name, spec in json_expansion_cols.items():
+                if column_name not in dict_row:
+                    continue
+                # keep_original on a native dict with no flatten_spec: let the dict pass
+                # through to _flatten for normal expansion and cache the serialized original
+                if not spec.flatten_spec and spec.keep_original and isinstance(dict_row[column_name], dict):
+                    originals_to_inject[column_name] = json_to_str(dict_row[column_name])
+                    continue
+                if spec.flatten_spec or spec.keep_original:
+                    original_value, expanded_dict = expand_json_column(
+                        dict_row[column_name],
+                        spec.flatten_spec,
+                        spec.keep_original,
+                        spec.force_string,
+                        spec.max_depth,
+                    )
+                    if expanded_dict is not None:
+                        expanded_row[column_name] = expanded_dict
+                    if spec.keep_original:
+                        originals_to_inject[column_name] = original_value
+            dict_row = expanded_row
+
         # flatten current row and extract all lists to recur into
         flattened_row, lists = self._flatten(table, dict_row, _r_lvl)
+
+        # inject original values back onto their source columns after flattening
+        for col, orig_val in originals_to_inject.items():
+            flattened_row[col] = orig_val
+
         # only extend row if there's something to extend
         if extend:
             flattened_row.update(extend)
@@ -406,6 +444,7 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         self._is_nested_type.cache_clear()
         self._should_be_nested.cache_clear()
         self._get_root_row_id_type.cache_clear()
+        self._get_json_expansion_columns.cache_clear()
         if self._get_propagation_mapping:
             self._get_propagation_mapping.cache_clear()
 
