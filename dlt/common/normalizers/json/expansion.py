@@ -59,7 +59,7 @@ def expand_json_column(
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
     """
     Expand JSON column according to flatten specification.
-    
+
     Returns:
         Tuple of (original_value_to_store, dict_to_flatten)
     """

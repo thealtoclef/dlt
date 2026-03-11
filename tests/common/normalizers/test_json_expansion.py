@@ -23,7 +23,7 @@ def norm() -> RelationalNormalizer:
 def test_ac1_basic_json_flatten(norm: RelationalNormalizer) -> None:
     """AC1: Basic JSON string flattening."""
     print("AC1: Basic JSON String Flattening")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
@@ -54,13 +54,18 @@ def test_ac1_basic_json_flatten(norm: RelationalNormalizer) -> None:
 def test_ac2_keep_original(norm: RelationalNormalizer) -> None:
     """AC2: Keep original column alongside flattened columns."""
     print("AC2: Keep Original Column")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
             columns=[
                 {"name": "id", "data_type": "bigint"},
-                {"name": "metadata", "data_type": "text", "x-json-flatten": True, "x-json-keep-original": True},
+                {
+                    "name": "metadata",
+                    "data_type": "text",
+                    "x-json-flatten": True,
+                    "x-json-keep-original": True,
+                },
             ],
         )
     )
@@ -86,13 +91,18 @@ def test_ac2_keep_original(norm: RelationalNormalizer) -> None:
 def test_ac3_path_based_with_keep_original(norm: RelationalNormalizer) -> None:
     """AC3: Path-based flattening with keep_original."""
     print("AC3: Keep Original + Path-Based")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
             columns=[
                 {"name": "id", "data_type": "bigint"},
-                {"name": "data", "data_type": "text", "x-json-flatten": ["user.name"], "x-json-keep-original": True},
+                {
+                    "name": "data",
+                    "data_type": "text",
+                    "x-json-flatten": ["user.name"],
+                    "x-json-keep-original": True,
+                },
             ],
         )
     )
@@ -110,8 +120,8 @@ def test_ac3_path_based_with_keep_original(norm: RelationalNormalizer) -> None:
 
     assert flattened_row["id"] == 1
     # Path-based flatten plus original JSON on base column
-    assert flattened_row["data"] == (
-        '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'
+    assert (
+        flattened_row["data"] == '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'
     )
     assert flattened_row["data__user__name"] == "John"
     assert "data__user__age" not in flattened_row
@@ -121,7 +131,7 @@ def test_ac3_path_based_with_keep_original(norm: RelationalNormalizer) -> None:
 def test_ac4_keep_original_without_flatten(norm: RelationalNormalizer) -> None:
     """AC4: Keep original without flattening."""
     print("AC4: Keep Original Without Flattening")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
@@ -151,7 +161,7 @@ def test_ac4_keep_original_without_flatten(norm: RelationalNormalizer) -> None:
 def test_ac5_keep_original_with_dict_native(norm: RelationalNormalizer) -> None:
     """AC5: Keep original with dict (serialize to JSON string)."""
     print("AC5: Keep Original with Native Dicts")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
@@ -163,7 +173,14 @@ def test_ac5_keep_original_with_dict_native(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    row = {"id": 1, "user_profile": {"name": "John", "email": "john@example.com", "settings": {"theme": "dark"}}}
+    row = {
+        "id": 1,
+        "user_profile": {
+            "name": "John",
+            "email": "john@example.com",
+            "settings": {"theme": "dark"},
+        },
+    }
     print("\nINPUT:", row)
     print("CONFIG: x-json-keep-original=True (no flatten_spec)")
 
@@ -177,21 +194,26 @@ def test_ac5_keep_original_with_dict_native(norm: RelationalNormalizer) -> None:
     assert "user_profile__name" not in flattened_row
     assert "user_profile__email" not in flattened_row
     assert "user_profile__settings__theme" not in flattened_row
-    assert flattened_row["user_profile"] == (
-        '{"name": "John", "email": "john@example.com", "settings": {"theme": "dark"}}'
+    assert (
+        flattened_row["user_profile"]
+        == '{"name": "John", "email": "john@example.com", "settings": {"theme": "dark"}}'
     )
 
 
 def test_ac6_path_based_only(norm: RelationalNormalizer) -> None:
     """AC6: Path-based flattening only (no keep_original)."""
     print("AC6: Path-Based Extraction Only")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
             columns=[
                 {"name": "id", "data_type": "bigint"},
-                {"name": "data", "data_type": "text", "x-json-flatten": ["user.name", "user.email"]},
+                {
+                    "name": "data",
+                    "data_type": "text",
+                    "x-json-flatten": ["user.name", "user.email"],
+                },
             ],
         )
     )
@@ -217,7 +239,7 @@ def test_ac6_path_based_only(norm: RelationalNormalizer) -> None:
 def test_ac7_array_at_level_2(norm: RelationalNormalizer) -> None:
     """AC7: Array at level 2 creates nested table."""
     print("AC7: Arrays at Second Level")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
@@ -229,18 +251,21 @@ def test_ac7_array_at_level_2(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    row = {"id": 1, "metadata": '{"name": "John", "tags": [{"label": "vip"}, {"label": "premium"}]}'}
+    row = {
+        "id": 1,
+        "metadata": '{"name": "John", "tags": [{"label": "vip"}, {"label": "premium"}]}',
+    }
     print("\nINPUT:", row)
     print("CONFIG: x-json-flatten=True")
 
     rows = list(norm.normalize_data_item(row, "load_id", "test_table"))
     main_row = next(r[1] for r in rows if r[0][0] == "test_table")
     tag_rows = [r[1] for r in rows if r[0][0] == "test_table__metadata__tags"]
-    
+
     # Filter out DLT internal metadata columns for cleaner output
     main_row_clean = {k: v for k, v in main_row.items() if not k.startswith("_dlt_")}
     tag_rows_clean = [{k: v for k, v in tr.items() if not k.startswith("_dlt_")} for tr in tag_rows]
-    
+
     print("OUTPUT - Main table:", main_row_clean)
     print("OUTPUT - Nested table (test_table__metadata__tags):", len(tag_rows_clean), "rows")
     for i, tag_row in enumerate(tag_rows_clean):
@@ -260,7 +285,7 @@ def test_ac7_array_at_level_2(norm: RelationalNormalizer) -> None:
 def test_ac8_invalid_json(norm: RelationalNormalizer) -> None:
     """AC8: Invalid JSON keeps original value."""
     print("AC8: Invalid JSON Handling")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
@@ -290,13 +315,17 @@ def test_ac8_invalid_json(norm: RelationalNormalizer) -> None:
 def test_ac9_missing_path(norm: RelationalNormalizer) -> None:
     """AC9: Missing path silently skipped."""
     print("AC9: Missing Paths Handling")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",
             columns=[
                 {"name": "id", "data_type": "bigint"},
-                {"name": "data", "data_type": "text", "x-json-flatten": ["user.name", "user.email"]},
+                {
+                    "name": "data",
+                    "data_type": "text",
+                    "x-json-flatten": ["user.name", "user.email"],
+                },
             ],
         )
     )
@@ -321,7 +350,7 @@ def test_ac10_arrow_parquet_struct_with_path_filter(norm: RelationalNormalizer) 
     """AC10: Arrow/Parquet struct with path filtering."""
 
     print("AC10: Arrow/Parquet Struct Support")
-    
+
     norm.schema.update_table(
         new_table(
             "test_table",

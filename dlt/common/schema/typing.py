@@ -196,6 +196,7 @@ class TColumnSchema(TColumnSchemaBase, total=False):
     dedup_sort: Optional[TSortOrder]
     incremental: Optional[bool]
 
+
 TTableSchemaColumns = Dict[str, TColumnSchema]
 """A mapping from column name to column schema, typically part of a table schema"""
 
