@@ -263,15 +263,18 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
     ) -> TNormalizedRowIterator:
         table = self._shorten_fragments(*parent_path, *ident_path)
 
+        # Store raw JSON values that should be re-injected after flattening.
+        originals_to_inject: DictStrAny = {}
+
         # Apply JSON expansion hints before running the standard flattening logic.
         table_schema = self.schema.tables.get(table)
         if table_schema:
             expanded_row = dict_row.copy()
-            
+
             for column_name, column_schema in table_schema.get("columns", {}).items():
                 if column_name not in dict_row:
                     continue
-                
+
                 flatten_spec = column_schema.get("x-json-flatten")
                 keep_original = column_schema.get("x-json-keep-original", False)
 
@@ -279,7 +282,7 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                 if not flatten_spec and keep_original and isinstance(dict_row[column_name], dict):
                     expanded_row[column_name] = json.dumps(dict_row[column_name])
                     continue
-                
+
                 if flatten_spec or keep_original:
                     original_value, expanded_dict = expand_json_column(
                         dict_row[column_name],
@@ -293,14 +296,18 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                     if expanded_dict is not None:
                         expanded_row[column_name] = expanded_dict
 
-                    # Optionally keep the original JSON value alongside flattened columns.
+                    # Cache raw JSON values to inject back after flattening.
                     if keep_original:
-                        expanded_row[f"{column_name}__original"] = original_value
-            
+                        originals_to_inject[column_name] = original_value
+
             dict_row = expanded_row
-        
+
         # flatten current row and extract all lists to recur into
         flattened_row, lists = self._flatten(table, dict_row, _r_lvl)
+
+        # Inject raw JSON values on original columns after flattening.
+        for col, orig_val in originals_to_inject.items():
+            flattened_row[col] = orig_val
         # always extend row
         DataItemNormalizer._extend_row(extend, flattened_row)
 
