@@ -77,9 +77,10 @@ def test_ac2_keep_original(norm: RelationalNormalizer) -> None:
     print("OUTPUT:", output_clean)
 
     assert flattened_row["id"] == 1
-    assert flattened_row["metadata"] == '{"name": "John", "email": "john@example.com"}'
+    assert "metadata" not in flattened_row
     assert flattened_row["metadata__name"] == "John"
     assert flattened_row["metadata__email"] == "john@example.com"
+    assert flattened_row["metadata__original"] == '{"name": "John", "email": "john@example.com"}'
 
 
 def test_ac3_path_based_with_keep_original(norm: RelationalNormalizer) -> None:
@@ -108,10 +109,14 @@ def test_ac3_path_based_with_keep_original(norm: RelationalNormalizer) -> None:
     print("OUTPUT:", output_clean)
 
     assert flattened_row["id"] == 1
-    assert flattened_row["data"] == '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'
+    # AC3: path-based flatten + keep_original => only selected paths + __original
+    assert "data" not in flattened_row
     assert flattened_row["data__user__name"] == "John"
     assert "data__user__age" not in flattened_row
     assert "data__timestamp" not in flattened_row
+    assert flattened_row["data__original"] == (
+        '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'
+    )
 
 
 def test_ac4_keep_original_without_flatten(norm: RelationalNormalizer) -> None:
@@ -170,11 +175,12 @@ def test_ac5_keep_original_with_dict_native(norm: RelationalNormalizer) -> None:
     print("OUTPUT:", output_clean)
 
     assert flattened_row["id"] == 1
-    assert "user_profile__name" in flattened_row
-    assert "user_profile__email" in flattened_row
-    assert "user_profile__settings__theme" in flattened_row
-    assert "user_profile__original" in flattened_row
-    assert isinstance(flattened_row["user_profile__original"], str)
+    assert "user_profile__name" not in flattened_row
+    assert "user_profile__email" not in flattened_row
+    assert "user_profile__settings__theme" not in flattened_row
+    assert flattened_row["user_profile"] == (
+        '{"name": "John", "email": "john@example.com", "settings": {"theme": "dark"}}'
+    )
 
 
 def test_ac6_path_based_only(norm: RelationalNormalizer) -> None:
@@ -377,10 +383,11 @@ def test_multiple_json_columns(norm: RelationalNormalizer) -> None:
 
     # Assert: Both columns processed correctly
     assert flattened_row["id"] == 1
-    # metadata: full flatten + keep original
-    assert flattened_row["metadata"] == '{"name": "John", "email": "john@example.com"}'
+    # metadata: full flatten + keep original (no base column)
+    assert "metadata" not in flattened_row
     assert flattened_row["metadata__name"] == "John"
     assert flattened_row["metadata__email"] == "john@example.com"
+    assert flattened_row["metadata__original"] == '{"name": "John", "email": "john@example.com"}'
     # config: path-based only
     assert flattened_row["config__settings__theme"] == "dark"
     assert "config__settings__lang" not in flattened_row

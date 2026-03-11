@@ -87,15 +87,15 @@ def is_nested_type(
     table = schema.tables.get(table_name)
     if table:
         column = table["columns"].get(field_name)
-    
-    # JSON expansion: allow flattening (expansion layer already parsed JSON → dict)
+
+    # JSON expansion hints are handled in the expansion layer, not by nested-type detection.
+    # If a column has x-json-* hints, treat it as non-nested here.
     if column and column.get("x-json-flatten"):
         return False
-    
-    # AC5: keep_original with dict but no flatten_spec
-    if column and column.get("x-json-keep-original") and not column.get("x-json-flatten"):
+
+    if column and column.get("x-json-keep-original"):
         return False
-    
+
     if column is None or "data_type" not in column:
         data_type = schema.get_preferred_type(field_name)
     else:

@@ -66,16 +66,16 @@ def expand_json_column(
     if not flatten_spec:
         return raw_value, None
 
-    parsed = parse_json_value(raw_value)
+    parsed_value = parse_json_value(raw_value)
 
-    if parsed is None:
+    if parsed_value is None:
         return raw_value, None
 
     if flatten_spec is True:
-        return raw_value if keep_original else None, parsed
+        return raw_value if keep_original else None, parsed_value
 
     if isinstance(flatten_spec, list):
-        filtered = filter_by_paths(parsed, flatten_spec)
+        filtered = filter_by_paths(parsed_value, flatten_spec)
         return raw_value if keep_original else None, filtered
 
     return raw_value, None

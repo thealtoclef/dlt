@@ -262,8 +262,8 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         is_root: bool = False,
     ) -> TNormalizedRowIterator:
         table = self._shorten_fragments(*parent_path, *ident_path)
-        
-        # JSON expansion: parse JSON string → dict → merge with prefix → DLT._flatten()
+
+        # Apply JSON expansion hints before running the standard flattening logic.
         table_schema = self.schema.tables.get(table)
         if table_schema:
             expanded_row = dict_row.copy()
@@ -274,10 +274,10 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                 
                 flatten_spec = column_schema.get("x-json-flatten")
                 keep_original = column_schema.get("x-json-keep-original", False)
-                
-                # AC5: keep_original with dict but no flatten_spec
+
+                # keep_original with dict but no flatten_spec: store raw JSON on the original column
                 if not flatten_spec and keep_original and isinstance(dict_row[column_name], dict):
-                    expanded_row[f"{column_name}__original"] = json.dumps(dict_row[column_name])
+                    expanded_row[column_name] = json.dumps(dict_row[column_name])
                     continue
                 
                 if flatten_spec or keep_original:
@@ -286,15 +286,16 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                         flatten_spec,
                         keep_original,
                     )
-                    
+
+                    # Hand expanded dict back to the standard flattening logic by
+                    # setting it as the column value; RelationalNormalizer._flatten
+                    # will create the final column names (e.g. column__key).
                     if expanded_dict is not None:
-                        for key, value in expanded_dict.items():
-                            expanded_row[f"{column_name}__{key}"] = value
-                    
+                        expanded_row[column_name] = expanded_dict
+
+                    # Optionally keep the original JSON value alongside flattened columns.
                     if keep_original:
-                        expanded_row[column_name] = original_value
-                    elif expanded_dict is not None:
-                        expanded_row.pop(column_name, None)
+                        expanded_row[f"{column_name}__original"] = original_value
             
             dict_row = expanded_row
         
