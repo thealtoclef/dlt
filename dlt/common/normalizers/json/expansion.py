@@ -6,26 +6,22 @@ before they enter DLT's flattening pipeline.
 """
 
 import json
-import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
+from dlt.common import logger
 from dlt.common.typing import DictStrAny
 
-LOG = logging.getLogger(__name__)
 
-
-def parse_json_if_needed(value: Any) -> Optional[Dict[str, Any]]:
-    """Parse JSON string to dict if needed."""
+def parse_json_value(value: Any) -> Optional[DictStrAny]:
+    """Parse JSON string or dict-like value into a dict."""
     if value is None:
         return None
     if isinstance(value, dict):
         return value
-    if not isinstance(value, str):
-        return None
     try:
         return json.loads(value)
     except Exception:
-        LOG.debug("Invalid JSON string, skip flatten: %r", value)
+        logger.debug("Invalid JSON string, skip flatten: %r", value)
         return None
 
 
@@ -70,7 +66,7 @@ def expand_json_column(
     if not flatten_spec:
         return raw_value, None
 
-    parsed = parse_json_if_needed(raw_value)
+    parsed = parse_json_value(raw_value)
 
     if parsed is None:
         return raw_value, None
