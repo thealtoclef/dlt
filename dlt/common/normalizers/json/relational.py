@@ -276,7 +276,7 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                     continue
 
                 flatten_spec = column_schema.get("x-json-flatten")
-                keep_original = column_schema.get("x-json-keep-original", False)
+                keep_original: bool = column_schema.get("x-json-keep-original") == True
 
                 # keep_original with dict but no flatten_spec: store raw JSON on the original column
                 if not flatten_spec and keep_original and isinstance(dict_row[column_name], dict):
