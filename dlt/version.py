@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from packaging.requirements import Requirement
 
 DLT_IMPORT_NAME = "dlt"
-PKG_NAME = DLT_PKG_NAME = "dlt"
+PKG_NAME = DLT_PKG_NAME = "dlt_core"
 __version__ = pkg_version(DLT_PKG_NAME)
 DLT_PKG_REQUIREMENT = f"{DLT_PKG_NAME}=={__version__}"
 
