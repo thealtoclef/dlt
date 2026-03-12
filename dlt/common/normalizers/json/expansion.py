@@ -21,7 +21,9 @@ def parse_json_value(value: Any) -> Optional[DictStrAny]:
     try:
         return json.loads(value)
     except Exception:
-        logger.error("Invalid JSON value for JSON expansion, returning original value: %r", value)
+        logger.error(
+            "Invalid JSON value for JSON expansion, returning original value without flattening"
+        )
         return None
 
 
