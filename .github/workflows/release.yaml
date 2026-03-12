@@ -1,0 +1,17 @@
+name: 🚀 Release
+
+on:
+  push:
+    tags:
+      - "release"
+      - "prerelease"
+
+jobs:
+  call-python-release:
+    permissions:
+      id-token: write
+      contents: write
+    uses: thealtoclef/modular-automations/.github/workflows/python-release.yaml@main
+    with:
+      prerelease: ${{ github.ref_name == 'prerelease' }}
+      publish: true
