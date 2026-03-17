@@ -6,7 +6,7 @@ before they enter DLT's flattening pipeline.
 """
 
 import json
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from dlt.common import logger
 from dlt.common.typing import DictStrAny
