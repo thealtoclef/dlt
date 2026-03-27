@@ -256,6 +256,7 @@ class DeltaLoadFilesystemJob(TableFormatLoadFilesystemJob):
 
 class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
     def run(self) -> None:
+        from dlt.common.libs.pyarrow import pyarrow as pa
         from dlt.common.libs.pyiceberg import (
             write_iceberg_table,
             merge_iceberg_table,
@@ -265,11 +266,12 @@ class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
             build_iceberg_partition_spec,
         )
 
+        arrow_schema = pa.parquet.read_schema(self.file_paths[0])
         try:
             table = self._job_client.load_open_table(
                 "iceberg",
                 self.load_table_name,
-                schema=self.arrow_dataset.schema,
+                schema=arrow_schema,
             )
         except DestinationUndefinedEntity:
             from dlt.destinations.impl.filesystem.iceberg_adapter import TABLE_PROPERTIES_HINT
@@ -290,7 +292,7 @@ class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
 
             if spec_list:
                 partition_spec, iceberg_schema = build_iceberg_partition_spec(
-                    self.arrow_dataset.schema, spec_list
+                    arrow_schema, spec_list
                 )
                 create_table(
                     self._job_client.get_open_table_catalog("iceberg"),
@@ -305,7 +307,7 @@ class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
                     self._job_client.get_open_table_catalog("iceberg"),
                     table_id,
                     table_location=location,
-                    schema=self.arrow_dataset.schema,
+                    schema=arrow_schema,
                     properties=properties,
                 )
             # run again with created table
@@ -315,14 +317,15 @@ class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
         if self._load_table["write_disposition"] == "merge" and table is not None:
             merge_iceberg_table(
                 table=table,
-                data=self.arrow_dataset.to_table(),
+                file_paths=self.file_paths,
                 schema=self._load_table,
                 load_table_name=self.load_table_name,
+                arrow_schema=arrow_schema,
             )
         else:
             write_iceberg_table(
                 table=table,
-                data=self.arrow_dataset.to_table(),
+                file_paths=self.file_paths,
                 write_disposition=self._load_table["write_disposition"],
             )
 

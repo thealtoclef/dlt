@@ -5,7 +5,6 @@ import warnings
 import time
 
 from fsspec import AbstractFileSystem
-from packaging.version import Version
 
 from dlt import version
 from dlt.common import logger
@@ -34,6 +33,7 @@ try:
         PartitionSpec as IcebergPartitionSpec,
     )
     import pyarrow as pa
+    import pyarrow.parquet
     from pydantic import BaseModel, ConfigDict, Field
 except ModuleNotFoundError:
     raise MissingDependencyException(
@@ -41,21 +41,6 @@ except ModuleNotFoundError:
         [f"{version.DLT_PKG_NAME}[pyiceberg]"],
         "Install `pyiceberg` so dlt can create Iceberg tables in the `filesystem` destination.",
     )
-
-pyiceberg_semver = Version(pyiceberg.__version__)
-
-if pyiceberg_semver < Version("0.10.0"):
-    import pyiceberg.io.pyarrow as _pio
-
-    _orig_get_kwargs = _pio._get_parquet_writer_kwargs
-
-    def _patched_get_parquet_writer_kwargs(table_properties):  # type: ignore[no-untyped-def]
-        """Return the original kwargs **plus** store_decimal_as_integer=True."""
-        kwargs = _orig_get_kwargs(table_properties)
-        kwargs.setdefault("store_decimal_as_integer", True)
-        return kwargs
-
-    _pio._get_parquet_writer_kwargs = _patched_get_parquet_writer_kwargs
 
 
 def ensure_iceberg_compatible_arrow_schema(schema: pa.Schema) -> pa.Schema:
@@ -74,55 +59,87 @@ def ensure_iceberg_compatible_arrow_data(data: pa.Table) -> pa.Table:
 
 def write_iceberg_table(
     table: IcebergTable,
-    data: pa.Table,
+    file_paths: List[str],
     write_disposition: TWriteDisposition,
 ) -> None:
+    from pyiceberg.expressions import AlwaysTrue
+
     start_ts = time.monotonic()
-    if write_disposition == "append":
-        table.append(ensure_iceberg_compatible_arrow_data(data))
-    elif write_disposition == "replace":
-        table.overwrite(ensure_iceberg_compatible_arrow_data(data))
+    total_rows = 0
+
+    with table.transaction() as txn:
+        if write_disposition == "replace" and table.current_snapshot() is not None:
+            txn.delete(delete_filter=AlwaysTrue())
+
+        for path in file_paths:
+            chunk = ensure_iceberg_compatible_arrow_data(pa.parquet.read_table(path))
+            if len(chunk) == 0:
+                continue
+            total_rows += len(chunk)
+            txn.append(chunk)
+
+        if total_rows == 0:
+            from pyiceberg.io.pyarrow import schema_to_pyarrow
+
+            txn.append(schema_to_pyarrow(table.schema()).empty_table())
+
     logger.debug(
-        f"pyiceberg: {write_disposition} arrow with {data.num_rows} rows to table {table.name()} at"
-        f" location {table.location()} took {(time.monotonic() - start_ts)} seconds."
+        f"pyiceberg: {write_disposition} {total_rows} rows to table {table.name()} at"
+        f" {table.location()} took {time.monotonic() - start_ts:.1f}s"
     )
 
 
 def merge_iceberg_table(
     table: IcebergTable,
-    data: pa.Table,
+    file_paths: List[str],
     schema: TTableSchema,
     load_table_name: str,
+    arrow_schema: pa.Schema,
 ) -> None:
-    """Merges in-memory Arrow data into on-disk Iceberg table."""
+    """Merges Arrow data into an on-disk Iceberg table using upsert strategy."""
     strategy = schema["x-merge-strategy"]  # type: ignore[typeddict-item]
     if strategy in ("upsert", "insert-only"):
+        start_ts = time.monotonic()
+        total_rows = 0
+
         # evolve schema
+        compatible_schema = ensure_iceberg_compatible_arrow_schema(arrow_schema)
         with table.update_schema() as update:
-            update.union_by_name(ensure_iceberg_compatible_arrow_schema(data.schema))
+            update.union_by_name(compatible_schema)
+
+        # workaround: after update_schema(), the latest snapshot still references the old
+        # schema_id. txn.upsert() scans using the snapshot schema → ValueError on new columns.
+        # appending an empty table forces a new snapshot that references the updated schema_id.
+        current_snapshot = table.current_snapshot()
+        if current_snapshot is None or current_snapshot.schema_id != table.schema().schema_id:
+            table.append(compatible_schema.empty_table())
 
         if "parent" in schema:
             join_cols = [get_first_column_name_with_prop(schema, "unique")]
         else:
             join_cols = get_columns_names_with_prop(schema, "primary_key")
 
-        # TODO: replace the batching method with transaction with pyiceberg's release after 0.9.1
-        for rb in data.to_batches(max_chunksize=1_000):
-            batch_tbl = pa.Table.from_batches([rb])
-            batch_tbl = ensure_iceberg_compatible_arrow_data(batch_tbl)
-
-            table.upsert(
-                df=batch_tbl,
-                join_cols=join_cols,
-                when_matched_update_all=strategy == "upsert",
-                when_not_matched_insert_all=True,
-                case_sensitive=True,
-            )
+        with table.transaction() as txn:
+            for path in file_paths:
+                chunk = ensure_iceberg_compatible_arrow_data(pa.parquet.read_table(path))
+                total_rows += len(chunk)
+                txn.upsert(
+                    df=chunk,
+                    join_cols=join_cols,
+                    when_matched_update_all=strategy == "upsert",
+                    when_not_matched_insert_all=True,
+                    case_sensitive=True,
+                )
     else:
         raise ValueError(
             f'Merge strategy "{strategy}" is not supported for Iceberg tables. '
             f'Table: "{load_table_name}".'
         )
+
+    logger.debug(
+        f"pyiceberg: merge {total_rows} rows into table {table.name()} at"
+        f" {table.location()} took {time.monotonic() - start_ts:.1f}s"
+    )
 
 
 def get_sql_catalog(
