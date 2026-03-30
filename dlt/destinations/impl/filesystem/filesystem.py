@@ -261,10 +261,17 @@ class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
             write_iceberg_table,
             merge_iceberg_table,
             create_table,
+            add_column_docs_to_arrow_schema,
         )
         from dlt.destinations.impl.filesystem.iceberg_partition_spec import (
             build_iceberg_partition_spec,
         )
+        from dlt.destinations.impl.filesystem.iceberg_adapter import (
+            TABLE_PROPERTIES_HINT,
+            get_column_descriptions,
+        )
+
+        column_descriptions = get_column_descriptions(self._load_table)
 
         arrow_schema = pa.parquet.read_schema(self.file_paths[0])
         try:
@@ -272,10 +279,9 @@ class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
                 "iceberg",
                 self.load_table_name,
                 schema=arrow_schema,
+                column_descriptions=column_descriptions,
             )
         except DestinationUndefinedEntity:
-            from dlt.destinations.impl.filesystem.iceberg_adapter import TABLE_PROPERTIES_HINT
-
             location = self._job_client.get_open_table_location("iceberg", self.load_table_name)
             table_id = f"{self._job_client.dataset_name}.{self.load_table_name}"
 
@@ -289,6 +295,11 @@ class IcebergLoadFilesystemJob(TableFormatLoadFilesystemJob):
                 properties = {**(config_properties or {}), **(adapter_properties or {})}
             else:
                 properties = None
+
+            if column_descriptions:
+                arrow_schema = add_column_docs_to_arrow_schema(
+                    arrow_schema, column_descriptions
+                )
 
             if spec_list:
                 partition_spec, iceberg_schema = build_iceberg_partition_spec(
