@@ -53,7 +53,7 @@ from dlt.common.normalizers.json.helpers import (
     get_row_hash,
     requires_root_key,
 )
-from dlt.common.normalizers.json.expansion import expand_json_column
+from dlt.common.normalizers.json.expansion import expand_json_column, prune_and_cast_json
 from dlt.common.validation import validate_dict
 
 
@@ -318,9 +318,11 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                     # setting it as the column value; RelationalNormalizer._flatten
                     # will create the final column names (e.g. column__key).
                     if expanded_dict is not None:
-                        expanded_row[column_name] = expanded_dict
+                        max_depth = column_schema.get("x-json-max-flatten-depth", 2)
+                        force_str = column_schema.get("x-json-force-string", False)
+                        
+                        expanded_row[column_name] = prune_and_cast_json(expanded_dict, max_depth, force_str)
 
-                    # Cache raw JSON values to inject back after flattening.
                     if keep_original:
                         originals_to_inject[column_name] = original_value
 

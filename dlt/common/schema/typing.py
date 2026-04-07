@@ -169,6 +169,10 @@ TColumnProcessingHints = TypedDict(
     "TColumnProcessingHints",
     {
         "x-normalizer": Optional[Dict[str, Any]],
+        "x-json-flatten": Optional[Union[bool, List[str]]],
+        "x-json-keep-original": Optional[bool],
+        "x-json-force-string": Optional[bool],
+        "x-json-max-flatten-depth": Optional[int],
     },
     total=False,
 )
@@ -248,7 +252,7 @@ TTableProcessingHints = TypedDict(
 
 
 TWriteDisposition = Literal["skip", "append", "replace", "merge"]
-TLoaderMergeStrategy = Literal["delete-insert", "scd2", "upsert", "insert-only"]
+TLoaderMergeStrategy = Literal["delete-insert", "scd2", "upsert"]
 TLoaderReplaceStrategy = Literal["truncate-and-insert", "insert-from-staging", "staging-optimized"]
 
 

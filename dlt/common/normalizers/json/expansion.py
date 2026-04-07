@@ -81,3 +81,26 @@ def expand_json_column(
         return raw_value if keep_original else None, filtered
 
     return raw_value, None
+
+
+def prune_and_cast_json(data: Any, max_depth: int, force_str: bool, current_depth: int = 0) -> Any:
+    """
+    Preprocess JSON data before DLT's _flatten gets to it.
+    - Limits recursion depth to `max_depth` by serializing subtrees into JSON strings.
+    - Optionally casts primitive leaves to strings if `force_str=True`.
+    """
+    if current_depth >= max_depth and isinstance(data, (dict, list)):
+        return json.dumps(data, ensure_ascii=False)
+        
+    if isinstance(data, dict):
+        return {
+            str(k): prune_and_cast_json(v, max_depth, force_str, current_depth + 1)
+            for k, v in data.items()
+        }
+    elif isinstance(data, list):
+        return [prune_and_cast_json(item, max_depth, force_str, current_depth + 1) for item in data]
+    else:
+        # Primitive leaf node
+        if force_str and data is not None:
+            return str(data)
+        return data

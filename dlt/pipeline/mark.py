@@ -14,6 +14,8 @@ from dlt.extract import (
 def with_json_flatten(
     columns: Dict[str, Union[bool, List[str]]],
     keep_original: bool = False,
+    force_string: bool = False,
+    max_flatten_depth: int = 2,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Helper function to create column hints for JSON expansion.
@@ -23,6 +25,8 @@ def with_json_flatten(
             - True: Flatten entire JSON object
             - List[str]: Flatten only specified paths (e.g., ["user.name", "user.email"])
         keep_original: Whether to keep original JSON string column alongside flattened columns
+        force_string: If True, all primitive leaf nodes will be cast to string
+        max_flatten_depth: Stops flattening beyond this depth and stores remaining dicts/lists as JSON strings
     
     Returns:
         Column hints dict compatible with apply_hints() or make_hints(columns=...)
@@ -31,7 +35,8 @@ def with_json_flatten(
         @dlt.resource(
             apply_hints=dlt.mark.with_json_flatten(
                 {"metadata": True, "data": ["user.name", "user.email"]},
-                keep_original=True
+                keep_original=True,
+                force_string=True
             )
         )
         def my_resource():
@@ -42,6 +47,8 @@ def with_json_flatten(
         hints[col] = {
             "x-json-flatten": spec,
             "x-json-keep-original": keep_original,
+            "x-json-force-string": force_string,
+            "x-json-max-flatten-depth": max_flatten_depth,
         }
     return hints
 
