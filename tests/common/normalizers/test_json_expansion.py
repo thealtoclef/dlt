@@ -27,11 +27,13 @@ def test_ac1_basic_json_flatten(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "metadata": '{"name": "John", "email": "john@example.com"}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "metadata": '{"name": "John", "email": "john@example.com"}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -58,11 +60,13 @@ def test_ac2_keep_original(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "metadata": '{"name": "John", "email": "john@example.com"}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "metadata": '{"name": "John", "email": "john@example.com"}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -89,11 +93,13 @@ def test_ac3_path_based_with_keep_original(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -116,11 +122,13 @@ def test_ac4_keep_original_without_flatten(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "raw_json": '{"nested": {"field": "value"}}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "raw_json": '{"nested": {"field": "value"}}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -141,18 +149,20 @@ def test_ac5_keep_original_with_dict_native(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {
-            "id": 1,
-            "user_profile": {
-                "name": "John",
-                "email": "john@example.com",
-                "settings": {"theme": "dark"},
+    rows = list(
+        norm.normalize_data_item(
+            {
+                "id": 1,
+                "user_profile": {
+                    "name": "John",
+                    "email": "john@example.com",
+                    "settings": {"theme": "dark"},
+                },
             },
-        },
-        "load_id",
-        "test_table",
-    ))
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -161,7 +171,10 @@ def test_ac5_keep_original_with_dict_native(norm: RelationalNormalizer) -> None:
     assert row["user_profile__email"] == "john@example.com"
     assert row["user_profile__settings__theme"] == "dark"
     # original is preserved as a JSON string on the source column
-    assert row["user_profile"] == '{"name":"John","email":"john@example.com","settings":{"theme":"dark"}}'
+    assert (
+        row["user_profile"]
+        == '{"name":"John","email":"john@example.com","settings":{"theme":"dark"}}'
+    )
 
 
 def test_ac6_path_based_only(norm: RelationalNormalizer) -> None:
@@ -181,11 +194,13 @@ def test_ac6_path_based_only(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"user": {"name": "John", "email": "john@example.com", "age": 30}}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"user": {"name": "John", "email": "john@example.com", "age": 30}}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -208,11 +223,16 @@ def test_ac7_array_at_level_2(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "metadata": '{"name": "John", "tags": [{"label": "vip"}, {"label": "premium"}]}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {
+                "id": 1,
+                "metadata": '{"name": "John", "tags": [{"label": "vip"}, {"label": "premium"}]}',
+            },
+            "load_id",
+            "test_table",
+        )
+    )
     main_row = next(r[1] for r in rows if r[0][0] == "test_table")
     tag_rows = [r[1] for r in rows if r[0][0] == "test_table__metadata__tags"]
 
@@ -239,11 +259,13 @@ def test_ac8_invalid_json(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "metadata": "not-valid-json"},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "metadata": "not-valid-json"},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -268,11 +290,13 @@ def test_ac9_missing_path(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"user": {"name": "John"}}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"user": {"name": "John"}}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -293,11 +317,13 @@ def test_ac10_arrow_parquet_struct_with_path_filter(norm: RelationalNormalizer) 
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "struct_col": {"name": "John", "age": 30}},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "struct_col": {"name": "John", "age": 30}},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -328,15 +354,17 @@ def test_multiple_json_columns(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {
-            "id": 1,
-            "metadata": '{"name": "John", "email": "john@example.com"}',
-            "config": '{"settings": {"theme": "dark", "lang": "en"}}',
-        },
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {
+                "id": 1,
+                "metadata": '{"name": "John", "email": "john@example.com"}',
+                "config": '{"settings": {"theme": "dark", "lang": "en"}}',
+            },
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -363,11 +391,13 @@ def test_null_value_handling(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "metadata": None},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "metadata": None},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -388,11 +418,13 @@ def test_empty_json_object(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "metadata": "{}"},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "metadata": "{}"},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -417,14 +449,18 @@ def test_nested_paths_deep(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {
-            "id": 1,
-            "data": '{"a": {"b": {"c": {"d": "value1"}}}, "x": {"y": "value2"}, "z": "ignored"}',
-        },
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {
+                "id": 1,
+                "data": (
+                    '{"a": {"b": {"c": {"d": "value1"}}}, "x": {"y": "value2"}, "z": "ignored"}'
+                ),
+            },
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["id"] == 1
@@ -456,11 +492,13 @@ def test_force_string_scalars(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"count": 42, "score": 3.14, "active": true, "label": "ok"}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"count": 42, "score": 3.14, "active": true, "label": "ok"}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["data__count"] == "42"
@@ -487,11 +525,13 @@ def test_force_string_nested(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"user": {"age": 30, "score": 9.5}}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"user": {"age": 30, "score": 9.5}}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["data__user__age"] == "30"
@@ -517,17 +557,21 @@ def test_force_string_type_compatibility(norm: RelationalNormalizer) -> None:
     norm._reset()
 
     # first row: count is int
-    rows1 = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"count": 42}'},
-        "load_id",
-        "test_table",
-    ))
+    rows1 = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"count": 42}'},
+            "load_id",
+            "test_table",
+        )
+    )
     # second row: count is string
-    rows2 = list(norm.normalize_data_item(
-        {"id": 2, "data": '{"count": "hello"}'},
-        "load_id",
-        "test_table",
-    ))
+    rows2 = list(
+        norm.normalize_data_item(
+            {"id": 2, "data": '{"count": "hello"}'},
+            "load_id",
+            "test_table",
+        )
+    )
 
     assert rows1[0][1]["data__count"] == "42"
     assert rows2[0][1]["data__count"] == "hello"
@@ -552,15 +596,76 @@ def test_force_string_preserves_null(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"value": null, "count": 5}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"value": null, "count": 5}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["data__value"] is None
     assert row["data__count"] == "5"
+
+
+def test_root_json_array_skips_expansion_with_force_string(norm: RelationalNormalizer) -> None:
+    """JSON root is an array: expansion is skipped; original string is kept (regression for apply_force_string)."""
+    norm.schema.update_table(
+        new_table(
+            "test_table",
+            columns=[
+                {"name": "id", "data_type": "bigint"},
+                {
+                    "name": "data",
+                    "data_type": "text",
+                    "x-json-flatten": True,
+                    "x-json-flatten-force-string": True,
+                },
+            ],
+        )
+    )
+    norm._reset()
+
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '[{"a": 1}, {"a": 2}]'},
+            "load_id",
+            "test_table",
+        )
+    )
+    row = rows[0][1]
+
+    assert row["id"] == 1
+    assert row["data"] == '[{"a": 1}, {"a": 2}]'
+    assert "data__a" not in row
+
+
+def test_root_json_scalar_skips_expansion(norm: RelationalNormalizer) -> None:
+    """JSON root is a scalar: expansion is skipped."""
+    norm.schema.update_table(
+        new_table(
+            "test_table",
+            columns=[
+                {"name": "id", "data_type": "bigint"},
+                {"name": "data", "data_type": "text", "x-json-flatten": True},
+            ],
+        )
+    )
+    norm._reset()
+
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": "42"},
+            "load_id",
+            "test_table",
+        )
+    )
+    row = rows[0][1]
+
+    assert row["id"] == 1
+    assert row["data"] == "42"
+    assert not any(k.startswith("data__") for k in row)
 
 
 def test_force_string_false_is_default(norm: RelationalNormalizer) -> None:
@@ -576,15 +681,17 @@ def test_force_string_false_is_default(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"count": 42, "score": 3.14}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"count": 42, "score": 3.14}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
-    assert row["data__count"] == 42       # int, not string
-    assert row["data__score"] == 3.14     # float, not string
+    assert row["data__count"] == 42  # int, not string
+    assert row["data__score"] == 3.14  # float, not string
 
 
 # ---------------------------------------------------------------------------
@@ -610,11 +717,13 @@ def test_max_depth_1(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"user": {"name": "John", "age": 30}, "count": 5}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"user": {"name": "John", "age": 30}, "count": 5}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     # scalar at depth 1 — expanded normally
@@ -643,11 +752,13 @@ def test_max_depth_2(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"a": {"b": {"c": "deep"}, "val": 1}}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"a": {"b": {"c": "deep"}, "val": 1}}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     # scalar at depth 2 — expanded normally
@@ -671,11 +782,13 @@ def test_max_depth_none_is_unlimited(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"a": {"b": {"c": {"d": "value"}}}}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"a": {"b": {"c": {"d": "value"}}}}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     assert row["data__a__b__c__d"] == "value"
@@ -704,11 +817,13 @@ def test_max_depth_with_path_filter(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"a": {"x": 1, "y": {"z": 2}}, "b": "ignored"}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"a": {"x": 1, "y": {"z": 2}}, "b": "ignored"}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     # scalar at depth 2 inside "a" — expanded normally
@@ -739,11 +854,13 @@ def test_max_depth_with_force_string(norm: RelationalNormalizer) -> None:
     )
     norm._reset()
 
-    rows = list(norm.normalize_data_item(
-        {"id": 1, "data": '{"count": 42, "user": {"name": "John"}}'},
-        "load_id",
-        "test_table",
-    ))
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"count": 42, "user": {"name": "John"}}'},
+            "load_id",
+            "test_table",
+        )
+    )
     row = rows[0][1]
 
     # scalar at depth 1 — force_string coerces to str

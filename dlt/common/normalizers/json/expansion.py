@@ -5,27 +5,32 @@ Pure transformation layer for expanding JSON string columns into dictionaries
 before they enter DLT's flattening pipeline.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from dlt.common.json import json
 from dlt.common.data_types.type_helpers import json_to_str
 
 from dlt.common import logger
-from dlt.common.typing import DictStrAny
 
 
-def parse_json_value(value: Any) -> Optional[DictStrAny]:
-    """Parse JSON string or dict-like value into a dict."""
+def parse_json_value(value: Any) -> Optional[Any]:
+    """Parse JSON string or return native dict/list for column expansion.
+
+    JSON may parse to a dict, list, or scalar; only dict roots are expanded.
+    """
     if value is None:
         return None
+
     if isinstance(value, dict):
         return value
+
+    if isinstance(value, list):
+        return value
+
     try:
-        return cast(DictStrAny, json.loads(value))
+        return json.loads(value)
     except Exception:
-        logger.warning(
-            "invalid JSON value for column expansion, keeping original value"
-        )
+        logger.warning("invalid JSON value for column expansion, keeping original value")
         return None
 
 
@@ -64,10 +69,7 @@ def limit_depth(data: Dict[str, Any], max_depth: int) -> Dict[str, Any]:
     """
     if max_depth <= 1:
         return {k: json_to_str(v) if isinstance(v, dict) else v for k, v in data.items()}
-    return {
-        k: limit_depth(v, max_depth - 1) if isinstance(v, dict) else v
-        for k, v in data.items()
-    }
+    return {k: limit_depth(v, max_depth - 1) if isinstance(v, dict) else v for k, v in data.items()}
 
 
 def apply_force_string(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,7 +109,7 @@ def expand_json_column(
 
     parsed_value = parse_json_value(raw_value)
 
-    if parsed_value is None:
+    if parsed_value is None or not isinstance(parsed_value, dict):
         return raw_value, None
 
     if flatten_spec is True:

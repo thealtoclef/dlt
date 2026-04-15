@@ -300,7 +300,11 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                     continue
                 # keep_original on a native dict with no flatten_spec: let the dict pass
                 # through to _flatten for normal expansion and cache the serialized original
-                if not spec.flatten_spec and spec.keep_original and isinstance(dict_row[column_name], dict):
+                if (
+                    not spec.flatten_spec
+                    and spec.keep_original
+                    and isinstance(dict_row[column_name], dict)
+                ):
                     originals_to_inject[column_name] = json_to_str(dict_row[column_name])
                     continue
                 if spec.flatten_spec or spec.keep_original:

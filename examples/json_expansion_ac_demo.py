@@ -558,7 +558,7 @@ def ac14_json_root_primitive():
     """AC14: JSON string whose parsed root is not a dict.
 
     When the JSON string parses to an array or primitive (not a dict),
-    x-json-flatten cannot extract sub-columns. The column is dropped.
+    x-json-flatten cannot extract sub-columns. The original column value is kept.
     """
     print("\n" + "=" * 62)
     print("AC14: JSON Root Primitive (non-dict root)")
@@ -569,14 +569,14 @@ def ac14_json_root_primitive():
     output_rows = run_pipeline(input_rows, hints)
     row = _strip_dlt_cols(output_rows[0])
 
-    # Array at root: not a dict, cannot be flattened → column dropped
+    # Array at root: not a dict, cannot be flattened → keep original JSON string
     assert row["id"] == 1
-    assert "data" not in row, f"data should be dropped (non-dict root): {row}"
-    assert "data__0" not in row
+    assert row["data"] == "[1, 2, 3]"
+    assert not any(k.startswith("data__") for k in row)
 
     print(f"  Input:  {input_rows[0]}")
     print(f"  Output: {row}")
-    print("  PASS (array root → column dropped)")
+    print("  PASS (array root → original column preserved, no flatten)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

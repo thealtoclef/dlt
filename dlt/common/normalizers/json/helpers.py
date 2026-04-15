@@ -99,9 +99,7 @@ def is_nested_type(
 
     # JSON expansion hints are handled in the expansion layer, not by nested-type detection.
     # Only bypass when a hint is actually enabled (truthy) — explicit False must not interfere.
-    if column is not None and (
-        column.get("x-json-flatten") or column.get("x-json-keep-original")
-    ):
+    if column is not None and (column.get("x-json-flatten") or column.get("x-json-keep-original")):
         return False
 
     if column is None or "data_type" not in column:
