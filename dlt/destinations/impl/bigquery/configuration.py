@@ -10,11 +10,17 @@ from dlt.common.destination.client import DestinationClientDwhWithStagingConfigu
 
 @configspec
 class BigQueryClientConfiguration(DestinationClientDwhWithStagingConfiguration):
-    destination_type: Final[str] = dataclasses.field(default="bigquery", init=False, repr=False, compare=False)  # type: ignore
+    destination_type: Final[str] = dataclasses.field(
+        default="bigquery", init=False, repr=False, compare=False
+    )  # type: ignore
     credentials: Union[GcpServiceAccountCredentials, GcpOAuthCredentials] = None
     location: str = "US"
     project_id: Optional[str] = None
     """Note, that this is BigQuery project_id which could be different from credentials.project_id"""
+    job_project_id: Optional[str] = None
+    """Project where BigQuery jobs (queries, loads) are executed. If not set, uses project_id.
+    Useful when the service account has access to multiple projects and jobs should
+    run in a different project than where tables/datasets are created."""
     has_case_sensitive_identifiers: bool = True
     """If True then dlt expects to load data into case sensitive dataset"""
     should_set_case_sensitivity_on_new_dataset: bool = False

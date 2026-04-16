@@ -72,6 +72,7 @@ class BigQuerySqlClient(SqlClientBase[bigquery.Client], DBTransaction):
         project_id: Optional[str] = None,
         http_timeout: float = 15.0,
         retry_deadline: float = 60.0,
+        job_project_id: Optional[str] = None,
     ) -> None:
         self._client: bigquery.Client = None
         self.credentials: Union[
@@ -79,6 +80,7 @@ class BigQuerySqlClient(SqlClientBase[bigquery.Client], DBTransaction):
         ] = credentials
         self.location = location
         self.project_id = project_id or self.credentials.project_id
+        self.job_project_id = job_project_id or self.project_id
         self.http_timeout = http_timeout
         super().__init__(self.project_id, dataset_name, staging_dataset_name, capabilities)
 
@@ -91,7 +93,7 @@ class BigQuerySqlClient(SqlClientBase[bigquery.Client], DBTransaction):
     @raise_open_connection_error
     def open_connection(self) -> bigquery.Client:
         self._client = bigquery.Client(
-            self.project_id,
+            self.job_project_id,
             credentials=self.credentials.to_native_credentials(),
             location=self.location,
         )

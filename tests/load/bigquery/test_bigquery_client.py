@@ -79,6 +79,18 @@ def bigquery_project_id() -> Iterator[str]:
         os.environ[project_id_key] = saved_project_id
 
 
+@pytest.fixture
+def bigquery_job_project_id() -> Iterator[str]:
+    job_project_id = "execution_project_id"
+    job_project_key = "DESTINATION__BIGQUERY__JOB_PROJECT_ID"
+    saved_job_project = os.environ.get(job_project_key)
+    os.environ[job_project_key] = job_project_id
+    yield job_project_id
+    del os.environ[job_project_key]
+    if saved_job_project:
+        os.environ[job_project_key] = saved_job_project
+
+
 def test_service_credentials_with_default(environment: Any) -> None:
     gcpc = GcpServiceAccountCredentials()
     # resolve will miss values and try to find default credentials on the machine
@@ -287,6 +299,31 @@ def test_bigquery_different_project_id(bigquery_project_id) -> None:
         default_config_values={"project_id": bigquery_project_id},
     ) as client:
         assert bigquery_project_id in client.sql_client.catalog_name()
+
+
+def test_bigquery_job_project_id(bigquery_job_project_id, bigquery_project_id) -> None:
+    """Test scenario when job_project_id is different from project_id.
+
+    The job_project_id is used for executing BigQuery jobs while project_id
+    is used for creating datasets and tables.
+    """
+    config = resolve_configuration(
+        BigQueryClientConfiguration()._bind_dataset_name(dataset_name="dataset"),
+        sections=("destination", "bigquery"),
+    )
+    assert config.job_project_id == bigquery_job_project_id
+    assert config.project_id == bigquery_project_id
+
+    with cm_yield_client(
+        "bigquery",
+        dataset_name="dataset",
+        default_config_values={
+            "project_id": bigquery_project_id,
+            "job_project_id": bigquery_job_project_id,
+        },
+    ) as client:
+        assert bigquery_project_id in client.sql_client.catalog_name()
+        assert client.sql_client.job_project_id == bigquery_job_project_id
 
 
 def test_bigquery_autodetect_configuration(client: BigQueryClient) -> None:

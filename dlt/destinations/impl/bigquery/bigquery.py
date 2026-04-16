@@ -195,6 +195,7 @@ class BigQueryClient(SqlJobClientWithStagingDataset, SupportsStagingDestination)
             config.project_id,
             config.http_timeout,
             config.retry_deadline,
+            config.job_project_id,
         )
         super().__init__(schema, config, sql_client)
         self.config: BigQueryClientConfiguration = config

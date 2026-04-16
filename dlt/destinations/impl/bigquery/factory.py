@@ -174,6 +174,8 @@ class bigquery(Destination[BigQueryClientConfiguration, "BigQueryClient"]):
         self,
         credentials: GcpServiceAccountCredentials = None,
         location: str = None,
+        project_id: str = None,
+        job_project_id: str = None,
         has_case_sensitive_identifiers: bool = None,
         destination_name: str = None,
         environment: str = None,
@@ -187,6 +189,10 @@ class bigquery(Destination[BigQueryClientConfiguration, "BigQueryClient"]):
             credentials (GcpServiceAccountCredentials, optional): Credentials to connect to the BigQuery database. Can be an instance of `GcpServiceAccountCredentials` or
                 a dict or string with service accounts credentials as used in the Google Cloud
             location (str, optional): A location where the datasets will be created, eg. "EU". The default is "US"
+            project_id (str, optional): A project_id where the dataset will be created. If not set, the project_id from credentials is used
+            job_project_id (str, optional): A project_id where BigQuery jobs will be executed. If not set, project_id is used.
+                Useful when the service account has access to multiple projects and jobs should
+                run in a different project than where tables/datasets are created.
             has_case_sensitive_identifiers (bool, optional): Is the dataset case-sensitive, defaults to True
             destination_name (str, optional): Name of the destination, can be used in config section to differentiate between multiple of the same type
             environment (str, optional): Environment of the destination
@@ -195,6 +201,8 @@ class bigquery(Destination[BigQueryClientConfiguration, "BigQueryClient"]):
         super().__init__(
             credentials=credentials,
             location=location,
+            project_id=project_id,
+            job_project_id=job_project_id,
             has_case_sensitive_identifiers=has_case_sensitive_identifiers,
             destination_name=destination_name,
             environment=environment,
