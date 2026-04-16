@@ -78,9 +78,7 @@ def run_pipeline_with_child_tables(
     if failed > 0:
         raise AssertionError(f"Pipeline had {failed} failed jobs")
 
-    result: Dict[str, List[Dict[str, Any]]] = {
-        table_name: _fetchall_as_dicts(pipeline, table_name)
-    }
+    result: Dict[str, List[Dict[str, Any]]] = {table_name: _fetchall_as_dicts(pipeline, table_name)}
     if child_tables:
         for child in child_tables:
             result[child] = _fetchall_as_dicts(pipeline, child)
@@ -90,6 +88,7 @@ def run_pipeline_with_child_tables(
 # ─────────────────────────────────────────────────────────────────────────────
 # AC1: Basic JSON String Flattening
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def ac1_basic_json_flatten():
     """AC1: JSON string with x-json-flatten: True → __ columns."""
@@ -117,6 +116,7 @@ def ac1_basic_json_flatten():
 # AC2: Keep Original Column
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac2_keep_original():
     """AC2: JSON string with x-json-flatten + x-json-keep-original: True."""
     print("\n" + "=" * 62)
@@ -143,6 +143,7 @@ def ac2_keep_original():
 # AC3: Path-Based + Keep Original Combined
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac3_path_based_with_keep_original():
     """AC3: Path-filtered flatten with original preserved."""
     print("\n" + "=" * 62)
@@ -150,7 +151,9 @@ def ac3_path_based_with_keep_original():
     print("=" * 62)
 
     hints = with_json_flatten({"data": ["user.name"]}, keep_original=True)
-    input_rows = [{"id": 1, "data": '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'}]
+    input_rows = [
+        {"id": 1, "data": '{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'}
+    ]
     output_rows = run_pipeline(input_rows, hints)
     row = _strip_dlt_cols(output_rows[0])
 
@@ -169,6 +172,7 @@ def ac3_path_based_with_keep_original():
 # ─────────────────────────────────────────────────────────────────────────────
 # AC4: Keep Original Without Flattening
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def ac4_keep_original_without_flatten():
     """AC4: keep_original only (no flatten) — JSON string is NOT flattened."""
@@ -197,6 +201,7 @@ def ac4_keep_original_without_flatten():
 # AC5: Keep Original with Native Dict (no x-json-flatten)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac5_native_dict_keep_original():
     """AC5: Native dict with keep_original only — dict is flattened AND original is preserved."""
     print("\n" + "=" * 62)
@@ -204,14 +209,16 @@ def ac5_native_dict_keep_original():
     print("=" * 62)
 
     hints = with_json_flatten({"user_profile": []}, keep_original=True)
-    input_rows = [{
-        "id": 1,
-        "user_profile": {
-            "name": "John",
-            "email": "john@example.com",
-            "settings": {"theme": "dark"},
-        },
-    }]
+    input_rows = [
+        {
+            "id": 1,
+            "user_profile": {
+                "name": "John",
+                "email": "john@example.com",
+                "settings": {"theme": "dark"},
+            },
+        }
+    ]
     output_rows = run_pipeline(input_rows, hints)
     row = _strip_dlt_cols(output_rows[0])
 
@@ -222,7 +229,10 @@ def ac5_native_dict_keep_original():
     assert row["user_profile__email"] == "john@example.com"
     assert row["user_profile__settings__theme"] == "dark"
     # Original preserved as serialized JSON string on the same column name
-    assert row["user_profile"] == '{"name":"John","email":"john@example.com","settings":{"theme":"dark"}}'
+    assert (
+        row["user_profile"]
+        == '{"name":"John","email":"john@example.com","settings":{"theme":"dark"}}'
+    )
 
     print(f"  Input (native dict): {input_rows[0]}")
     print(f"  Output: {row}")
@@ -233,6 +243,7 @@ def ac5_native_dict_keep_original():
 # AC6: Path-Based Extraction Only
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac6_path_based_only():
     """AC6: Only specified dot-paths are flattened; all other fields excluded."""
     print("\n" + "=" * 62)
@@ -240,7 +251,9 @@ def ac6_path_based_only():
     print("=" * 62)
 
     hints = with_json_flatten({"data": ["user.name", "user.email"]})
-    input_rows = [{"id": 1, "data": '{"user": {"name": "John", "email": "john@example.com", "age": 30}}'}]
+    input_rows = [
+        {"id": 1, "data": '{"user": {"name": "John", "email": "john@example.com", "age": 30}}'}
+    ]
     output_rows = run_pipeline(input_rows, hints)
     row = _strip_dlt_cols(output_rows[0])
 
@@ -260,6 +273,7 @@ def ac6_path_based_only():
 # AC7: Arrays at Second Level → Nested Child Table
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac7_nested_array_child_table():
     """AC7: Nested array in JSON creates a child table via DLT's existing mechanism."""
     print("\n" + "=" * 62)
@@ -267,7 +281,9 @@ def ac7_nested_array_child_table():
     print("=" * 62)
 
     hints = with_json_flatten({"metadata": True})
-    input_rows = [{"id": 1, "metadata": '{"name": "John", "tags": [{"label": "vip"}, {"label": "premium"}]}'}]
+    input_rows = [
+        {"id": 1, "metadata": '{"name": "John", "tags": [{"label": "vip"}, {"label": "premium"}]}'}
+    ]
     tables = run_pipeline_with_child_tables(
         input_rows,
         hints,
@@ -308,6 +324,7 @@ def ac7_nested_array_child_table():
 # AC8: Invalid JSON Handling
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac8_invalid_json_handling():
     """AC8: Invalid JSON string kept as-is; no expansion; warning logged by dlt."""
     print("\n" + "=" * 62)
@@ -332,6 +349,7 @@ def ac8_invalid_json_handling():
 # ─────────────────────────────────────────────────────────────────────────────
 # AC9: Missing Paths in Data
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def ac9_missing_path_graceful():
     """AC9: Missing paths are skipped silently; no error."""
@@ -358,6 +376,7 @@ def ac9_missing_path_graceful():
 # AC10: Arrow/Parquet Struct with Path Filter
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac10_arrow_parquet_struct_with_path():
     """AC10: Native dict (Arrow/Parquet struct) with path-based x-json-flatten."""
     print("\n" + "=" * 62)
@@ -383,6 +402,7 @@ def ac10_arrow_parquet_struct_with_path():
 # AC11: Default Auto-Flattening (no apply_hints)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac11_default_auto_flatten():
     """AC11: Without any apply_hints, dlt auto-flattens native dict columns.
 
@@ -400,18 +420,20 @@ def ac11_default_auto_flatten():
         dataset_name="ac_data",
     )
 
-    input_rows = [{
-        "id": 1,
-        "profile": {
-            "name": "Alice",
-            "email": "alice@example.com",
-            "address": {
-                "city": "NYC",
-                "zip": "10001",
-                "country": {"code": "US", "name": "United States"},
+    input_rows = [
+        {
+            "id": 1,
+            "profile": {
+                "name": "Alice",
+                "email": "alice@example.com",
+                "address": {
+                    "city": "NYC",
+                    "zip": "10001",
+                    "country": {"code": "US", "name": "United States"},
+                },
             },
-        },
-    }]
+        }
+    ]
 
     @dlt.resource(table_name="test_table")
     def src():
@@ -434,8 +456,12 @@ def ac11_default_auto_flatten():
     assert row["profile__email"] == "alice@example.com", f"profile__email mismatch: {row}"
     assert row["profile__address__city"] == "NYC", f"profile__address__city mismatch: {row}"
     assert row["profile__address__zip"] == "10001", f"profile__address__zip mismatch: {row}"
-    assert row["profile__address__country__code"] == "US", f"profile__address__country__code mismatch: {row}"
-    assert row["profile__address__country__name"] == "United States", f"profile__address__country__name mismatch: {row}"
+    assert row["profile__address__country__code"] == "US", (
+        f"profile__address__country__code mismatch: {row}"
+    )
+    assert row["profile__address__country__name"] == "United States", (
+        f"profile__address__country__name mismatch: {row}"
+    )
     # No source column left (flattened completely)
     assert "profile" not in row, f"profile source column should be absent: {row}"
 
@@ -447,6 +473,7 @@ def ac11_default_auto_flatten():
 # ─────────────────────────────────────────────────────────────────────────────
 # AC12: Multiple JSON Columns with Different Configs
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def ac12_multiple_json_columns():
     """AC12: Two JSON columns with different hint configs in the same row.
@@ -463,11 +490,13 @@ def ac12_multiple_json_columns():
         "metadata": {"x-json-flatten": True, "x-json-keep-original": True},
         "config": {"x-json-flatten": ["settings.theme"]},
     }
-    input_rows = [{
-        "id": 1,
-        "metadata": '{"name": "Alice", "role": "admin"}',
-        "config": '{"settings": {"theme": "dark", "lang": "en"}}',
-    }]
+    input_rows = [
+        {
+            "id": 1,
+            "metadata": '{"name": "Alice", "role": "admin"}',
+            "config": '{"settings": {"theme": "dark", "lang": "en"}}',
+        }
+    ]
     output_rows = run_pipeline(input_rows, hints)
     row = _strip_dlt_cols(output_rows[0])
 
@@ -490,6 +519,7 @@ def ac12_multiple_json_columns():
 # ─────────────────────────────────────────────────────────────────────────────
 # AC13: Multi-Row Schema Evolution (Different JSON Structures Across Rows)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def ac13_multi_row_schema_evolution():
     """AC13: Same column has different JSON shapes across rows.
@@ -554,6 +584,7 @@ def ac13_multi_row_schema_evolution():
 # AC14: JSON Root Primitive (array at root level)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac14_json_root_primitive():
     """AC14: JSON string whose parsed root is not a dict.
 
@@ -565,7 +596,7 @@ def ac14_json_root_primitive():
     print("=" * 62)
 
     hints = {"data": {"x-json-flatten": True}}
-    input_rows = [{"id": 1, "data": '[1, 2, 3]'}]
+    input_rows = [{"id": 1, "data": "[1, 2, 3]"}]
     output_rows = run_pipeline(input_rows, hints)
     row = _strip_dlt_cols(output_rows[0])
 
@@ -583,6 +614,7 @@ def ac14_json_root_primitive():
 # AC15: Unicode and Special Characters in JSON
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ac15_unicode_special_chars():
     """AC15: JSON with Unicode characters and special symbols is correctly parsed.
 
@@ -593,10 +625,12 @@ def ac15_unicode_special_chars():
     print("=" * 62)
 
     hints = {"data": {"x-json-flatten": True}}
-    input_rows = [{
-        "id": 1,
-        "data": '{"name": "Alice", "msg": "hello\\nworld", "emoji": "🎉"}',
-    }]
+    input_rows = [
+        {
+            "id": 1,
+            "data": '{"name": "Alice", "msg": "hello\\nworld", "emoji": "🎉"}',
+        }
+    ]
     output_rows = run_pipeline(input_rows, hints)
     row = _strip_dlt_cols(output_rows[0])
 
@@ -614,6 +648,7 @@ def ac15_unicode_special_chars():
 # ─────────────────────────────────────────────────────────────────────────────
 # AC16: JSON Boolean Values (true/false as JSON primitives)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def ac16_json_boolean_values():
     """AC16: JSON 'true'/'false' parsed as Python booleans, not strings.
@@ -641,25 +676,84 @@ def ac16_json_boolean_values():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# AC17: max_table_nesting=0 blocks child tables but allows JSON flattening
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def ac17_max_nesting_zero_with_flatten():
+    print("\n" + "=" * 62)
+    print("AC17: max_table_nesting controls nesting depth")
+    print("=" * 62)
+
+    pipeline = dlt.pipeline(
+        pipeline_name=f"ac_demo_test_table_{uniq_id(6)}",
+        destination="duckdb",
+        dataset_name="ac_data",
+    )
+
+    input_rows = [
+        {
+            "id": 1,
+            "metadata": '{"name": "John", "email": "john@example.com"}',
+            "tags": ["vip", "premium"],
+        }
+    ]
+
+    @dlt.resource(
+        table_name="test_table",
+        columns={"metadata": {"x-json-flatten": True}},
+    )
+    def src():
+        yield input_rows
+
+    src = src()
+    src.max_table_nesting = 1
+
+    info = pipeline.run(src)
+    failed = sum(len(p.jobs["failed_jobs"]) for p in info.load_packages)
+    if failed > 0:
+        raise AssertionError(f"Pipeline had {failed} failed jobs")
+
+    dataset = pipeline.dataset()
+    relation = dataset["test_table"]
+    rows = [dict(zip(relation.columns, row)) for row in relation.fetchall()]
+    row = _strip_dlt_cols(rows[0])
+
+    assert row["id"] == 1
+    assert row["metadata__name"] == "John"
+    assert row["metadata__email"] == "john@example.com"
+    assert "metadata" not in row
+
+    tags_child = dataset["test_table__tags"]
+    tags_rows = list(tags_child.fetchall())
+    assert len(tags_rows) == 2
+
+    print(f"  max_nesting=1: {row}")
+    print(f"  child table: {tags_rows}")
+    print("  PASS")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def main():
     print("=" * 62)
-    print("dlt JSON Column Expansion — AC Demonstration (AC1-AC16)")
+    print("dlt JSON Column Expansion — AC Demonstration (AC1-AC17)")
     print("Destination: duckdb (in-memory)")
     print("=" * 62)
 
     acs = [
-        ("AC1",  ac1_basic_json_flatten),
-        ("AC2",  ac2_keep_original),
-        ("AC3",  ac3_path_based_with_keep_original),
-        ("AC4",  ac4_keep_original_without_flatten),
-        ("AC5",  ac5_native_dict_keep_original),
-        ("AC6",  ac6_path_based_only),
-        ("AC7",  ac7_nested_array_child_table),
-        ("AC8",  ac8_invalid_json_handling),
-        ("AC9",  ac9_missing_path_graceful),
+        ("AC1", ac1_basic_json_flatten),
+        ("AC2", ac2_keep_original),
+        ("AC3", ac3_path_based_with_keep_original),
+        ("AC4", ac4_keep_original_without_flatten),
+        ("AC5", ac5_native_dict_keep_original),
+        ("AC6", ac6_path_based_only),
+        ("AC7", ac7_nested_array_child_table),
+        ("AC8", ac8_invalid_json_handling),
+        ("AC9", ac9_missing_path_graceful),
         ("AC10", ac10_arrow_parquet_struct_with_path),
         ("AC11", ac11_default_auto_flatten),
         ("AC12", ac12_multiple_json_columns),
@@ -667,6 +761,7 @@ def main():
         ("AC14", ac14_json_root_primitive),
         ("AC15", ac15_unicode_special_chars),
         ("AC16", ac16_json_boolean_values),
+        ("AC17", ac17_max_nesting_zero_with_flatten),
     ]
 
     passed = 0

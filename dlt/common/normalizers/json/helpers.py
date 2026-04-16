@@ -1,6 +1,7 @@
 """
 Cached helper methods for all operations that are called often
 """
+
 from functools import lru_cache
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union, cast
 
@@ -86,12 +87,6 @@ def is_nested_type(
     """For those paths the nested objects should be left in place.
     Cache perf: max_nesting < _r_lvl: ~2x faster, full check 10x faster
     """
-
-    # nesting level is counted backwards
-    # is we have traversed to or beyond the calculated nesting level, we detect a nested type
-    if _r_lvl <= 0:
-        return True
-
     column: TColumnSchema = None
     table = schema.tables.get(table_name)
     if table:
@@ -101,6 +96,12 @@ def is_nested_type(
     # Only bypass when a hint is actually enabled (truthy) — explicit False must not interfere.
     if column is not None and (column.get("x-json-flatten") or column.get("x-json-keep-original")):
         return False
+
+    # Check nesting level after x-json-* hints are processed.
+    # Nesting level is counted backwards: if we have traversed to or beyond
+    # the calculated nesting level, we detect a nested type.
+    if _r_lvl <= 0:
+        return True
 
     if column is None or "data_type" not in column:
         data_type = schema.get_preferred_type(field_name)
