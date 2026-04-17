@@ -181,7 +181,7 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                         stack.append((v, r_lvl - 1, path + (norm_k,)))
                         continue
                 elif v_type is list:
-                    if not is_nested_type(table, nested_name, r_lvl):
+                    if not (r_lvl <= 0 or is_nested_type(table, nested_name, r_lvl)):
                         out_rec_list[path + (normalize_table_identifier(k),)] = v
                         continue
 

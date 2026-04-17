@@ -868,3 +868,82 @@ def test_max_depth_with_force_string(norm: RelationalNormalizer) -> None:
     # dict at depth 1 — limit_depth serialises it; force_string sees a string, no-op
     assert isinstance(row["data__user"], str)
     assert "data__user__name" not in row
+
+
+def test_keep_original_respects_max_table_nesting(norm: RelationalNormalizer) -> None:
+    """x-json-keep-original should not bypass max_table_nesting=0 - nested content must be serialized."""
+    from dlt.common.normalizers.json.relational import DataItemNormalizer as RelationalNormalizer
+
+    # Set max_table_nesting to 0 via normalizer config
+    RelationalNormalizer.update_normalizer_config(norm.schema, {"max_nesting": 0})
+
+    norm.schema.update_table(
+        new_table(
+            "test_table",
+            columns=[
+                {"name": "id", "data_type": "bigint"},
+                {"name": "data", "data_type": "json", "x-json-keep-original": True},
+            ],
+        )
+    )
+    norm._reset()
+
+    rows = list(
+        norm.normalize_data_item(
+            {
+                "id": 1,
+                "data": {
+                    "nested": {"field": "value"},
+                },
+            },
+            "load_id",
+            "test_table",
+        )
+    )
+
+    # With max_table_nesting=0, only ONE table should be produced (no child tables)
+    assert len(rows) == 1
+    table_name = rows[0][0][0]
+    row = rows[0][1]
+
+    assert table_name == "test_table"
+    # The nested dict must be serialized as a JSON string, not create child table
+    assert isinstance(row["data"], str)
+    assert "data__nested" not in row
+    assert "data__nested__field" not in row
+
+
+def test_flatten_respects_max_table_nesting(norm: RelationalNormalizer) -> None:
+    """x-json-flatten still expands into parent columns at max_table_nesting=0 (no child tables)."""
+    from dlt.common.normalizers.json.relational import DataItemNormalizer as RelationalNormalizer
+
+    # Set max_table_nesting to 0 via normalizer config
+    RelationalNormalizer.update_normalizer_config(norm.schema, {"max_nesting": 0})
+
+    norm.schema.update_table(
+        new_table(
+            "test_table",
+            columns=[
+                {"name": "id", "data_type": "bigint"},
+                {"name": "data", "data_type": "text", "x-json-flatten": True},
+            ],
+        )
+    )
+    norm._reset()
+
+    rows = list(
+        norm.normalize_data_item(
+            {"id": 1, "data": '{"leaf": "value"}'},
+            "load_id",
+            "test_table",
+        )
+    )
+
+    # With max_table_nesting=0, only ONE table should be produced (no child tables)
+    assert len(rows) == 1
+    table_name = rows[0][0][0]
+    row = rows[0][1]
+
+    assert table_name == "test_table"
+    assert row["data__leaf"] == "value"
+    assert "data" not in row

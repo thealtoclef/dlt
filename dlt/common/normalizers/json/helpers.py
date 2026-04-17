@@ -92,16 +92,15 @@ def is_nested_type(
     if table:
         column = table["columns"].get(field_name)
 
+    if _r_lvl <= 0:
+        if column is not None and column.get("x-json-flatten"):
+            return False
+        return True
+
     # JSON expansion hints are handled in the expansion layer, not by nested-type detection.
-    # Only bypass when a hint is actually enabled (truthy) — explicit False must not interfere.
+    # Only bypass when a hint is actually enabled (truthy) - explicit False must not interfere.
     if column is not None and (column.get("x-json-flatten") or column.get("x-json-keep-original")):
         return False
-
-    # Check nesting level after x-json-* hints are processed.
-    # Nesting level is counted backwards: if we have traversed to or beyond
-    # the calculated nesting level, we detect a nested type.
-    if _r_lvl <= 0:
-        return True
 
     if column is None or "data_type" not in column:
         data_type = schema.get_preferred_type(field_name)

@@ -734,13 +734,71 @@ def ac17_max_nesting_zero_with_flatten():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# AC18: max_table_nesting=0 keeps native list of dicts as JSON blob
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def ac18_max_nesting_zero_list_of_json():
+    print("\n" + "=" * 62)
+    print("AC18: max_table_nesting=0 keeps list of JSON as blob")
+    print("=" * 62)
+
+    pipeline = dlt.pipeline(
+        pipeline_name=f"ac_demo_test_table_{uniq_id(6)}",
+        destination="duckdb",
+        dataset_name="ac_data",
+    )
+
+    input_rows = [
+        {
+            "id": 1,
+            "items": [{"sku": "A1", "qty": 10}, {"sku": "B2", "qty": 5}],
+        }
+    ]
+
+    @dlt.resource(table_name="test_table")
+    def src():
+        yield input_rows
+
+    src = src()
+    src.max_table_nesting = 0
+
+    info = pipeline.run(src)
+    failed = sum(len(p.jobs["failed_jobs"]) for p in info.load_packages)
+    if failed > 0:
+        raise AssertionError(f"Pipeline had {failed} failed jobs")
+
+    dataset = pipeline.dataset()
+    relation = dataset["test_table"]
+    rows = [dict(zip(relation.columns, row)) for row in relation.fetchall()]
+    row = _strip_dlt_cols(rows[0])
+
+    assert row["id"] == 1
+    assert "items" in row
+    assert isinstance(row["items"], str)
+    assert "sku" in row["items"] and "qty" in row["items"]
+
+    try:
+        dataset["test_table__items"]
+        raise AssertionError(
+            "test_table__items child table should NOT exist with max_table_nesting=0"
+        )
+    except KeyError:
+        pass
+
+    print(f"  Input:  {input_rows[0]}")
+    print(f"  Output: {row}")
+    print("  PASS (list of JSON stays in main table, no child table)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # main
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def main():
     print("=" * 62)
-    print("dlt JSON Column Expansion — AC Demonstration (AC1-AC17)")
+    print("dlt JSON Column Expansion — AC Demonstration (AC1-AC18)")
     print("Destination: duckdb (in-memory)")
     print("=" * 62)
 
@@ -762,6 +820,7 @@ def main():
         ("AC15", ac15_unicode_special_chars),
         ("AC16", ac16_json_boolean_values),
         ("AC17", ac17_max_nesting_zero_with_flatten),
+        ("AC18", ac18_max_nesting_zero_list_of_json),
     ]
 
     passed = 0
