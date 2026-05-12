@@ -1,4 +1,5 @@
-from typing import List, Dict, Set, Any
+from typing import List, Dict, Set, Any, Optional, Tuple
+from functools import partial
 
 from dlt.common import logger
 from dlt.common.data_writers.writers import ArrowToObjectAdapter
@@ -14,6 +15,7 @@ from dlt.common.storages import NormalizeStorage
 from dlt.common.storages.data_item_storage import DataItemStorage
 from dlt.common.storages.load_package import ParsedLoadJobFileName
 from dlt.common.exceptions import MissingDependencyException
+from dlt.common.normalizers.json import helpers as normalize_helpers
 
 from dlt.common.runtime.collector import Collector, NULL_COLLECTOR
 from dlt.normalize.configuration import NormalizeConfiguration
@@ -25,6 +27,72 @@ try:
 except MissingDependencyException:
     pyarrow = None
     pa = None
+
+
+def _flatten_py_arrow_item(
+    item: Any,
+    naming: Any,
+    max_nesting: int = 20,
+    is_nested_type: Optional[Any] = None,
+    json_expansion_cols: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Recursively flattens all StructArray columns in the arrow item."""
+    if max_nesting <= 0:
+        return item
+
+    schema = item.schema
+    new_fields = []
+    new_columns = []
+    has_flattened = False
+    json_expansion_cols = json_expansion_cols or {}
+
+    for i in range(len(schema)):
+        field = schema.field(i)
+        column = item.column(i)
+        
+        should_flatten = False
+        if field.name in json_expansion_cols:
+            spec = json_expansion_cols[field.name]
+            if spec.flatten_spec:
+                should_flatten = True
+                if pa.types.is_string(field.type) or pa.types.is_large_string(field.type):
+                    py_values = [json.loads(v) if v is not None else None for v in column.to_pylist()]
+                    column = pa.array(py_values)
+                    field = pa.field(field.name, column.type)
+        elif pa.types.is_struct(field.type):
+            if is_nested_type:
+                if not is_nested_type(field.name, max_nesting):
+                    should_flatten = True
+            else:
+                should_flatten = True
+
+        if should_flatten and pa.types.is_struct(field.type):
+            has_flattened = True
+            struct_array = column
+            if isinstance(struct_array, pa.ChunkedArray):
+                for j in range(len(field.type)):
+                    child_field = field.type[j]
+                    child_name = naming.shorten_fragments(field.name, child_field.name)
+                    child_chunks = [chunk.field(j) for chunk in struct_array.chunks]
+                    new_fields.append(child_field.with_name(child_name))
+                    new_columns.append(pa.chunked_array(child_chunks))
+            else:
+                for j in range(len(field.type)):
+                    child_field = field.type[j]
+                    child_name = naming.shorten_fragments(field.name, child_field.name)
+                    new_fields.append(child_field.with_name(child_name))
+                    new_columns.append(struct_array.field(j))
+        else:
+            new_fields.append(field)
+            new_columns.append(column)
+
+    if not has_flattened:
+        return item
+
+    new_item = item.__class__.from_arrays(
+        new_columns, schema=pa.schema(new_fields, metadata=item.schema.metadata)
+    )
+    return _flatten_py_arrow_item(new_item, naming, max_nesting - 1, is_nested_type, json_expansion_cols)
 
 
 class ArrowItemsNormalizer(ItemsNormalizer):
@@ -102,7 +170,7 @@ class ArrowItemsNormalizer(ItemsNormalizer):
             new_columns.append(
                 (
                     -1,
-                    pa.field(data_normalizer.c_dlt_id, pyarrow.pyarrow.string(), nullable=False),
+                    pa.field(data_normalizer.c_dlt_id, pa.string(), nullable=False),
                     lambda batch: pa.array(generate_dlt_ids(batch.num_rows)),
                 )
             )
@@ -140,6 +208,19 @@ class ArrowItemsNormalizer(ItemsNormalizer):
                     )
                     # normalize may remove null columns and set dlt.null_columns metadata
                     self._collect_null_columns_from_arrow_metadata(batch.schema, root_table_name)
+
+                # get relational context (flattening hints and rules) directly from schema helpers
+                json_expansion_cols = normalize_helpers.get_json_expansion_columns(schema, root_table_name)
+                is_nested_type = partial(normalize_helpers.is_nested_type, schema, root_table_name)
+
+                # flatten nested structs respecting schema hints and max nesting
+                batch = _flatten_py_arrow_item(
+                    batch, 
+                    schema.naming, 
+                    self.config.max_table_nesting,
+                    is_nested_type=is_nested_type,
+                    json_expansion_cols=json_expansion_cols
+                )
                 self.item_storage.write_data_item(
                     load_id,
                     schema.name,
