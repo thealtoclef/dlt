@@ -947,3 +947,106 @@ def test_flatten_respects_max_table_nesting(norm: RelationalNormalizer) -> None:
     assert table_name == "test_table"
     assert row["data__leaf"] == "value"
     assert "data" not in row
+
+
+# ---------------------------------------------------------------------------
+# flatten_expanded_dict tests
+# ---------------------------------------------------------------------------
+
+
+def test_flatten_expanded_dict_flat() -> None:
+    """flat dict with scalars is returned unchanged."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    flat = flatten_expanded_dict({"a": 1, "b": "hello", "c": 3.14})
+    assert flat == {"a": 1, "b": "hello", "c": 3.14}
+
+
+def test_flatten_expanded_dict_nested() -> None:
+    """nested dict is flattened with __ separator."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict({"user": {"name": "John", "age": 30}})
+    assert result == {"user__name": "John", "user__age": 30}
+
+
+def test_flatten_expanded_dict_deeply_nested() -> None:
+    """deeply nested dict is fully flattened."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict({"a": {"b": {"c": {"d": "value"}}}})
+    assert result == {"a__b__c__d": "value"}
+
+
+def test_flatten_expanded_dict_list_serialized() -> None:
+    """lists are serialized to JSON strings."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict({"tags": [{"label": "vip"}, {"label": "premium"}]})
+    assert isinstance(result["tags"], str)
+    assert "vip" in result["tags"]
+
+
+def test_flatten_expanded_dict_preserves_none() -> None:
+    """None values are preserved."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict({"a": None, "b": {"c": None}})
+    assert result == {"a": None, "b__c": None}
+
+
+def test_flatten_expanded_dict_custom_separator() -> None:
+    """custom separator is respected."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict({"user": {"name": "John"}}, separator=".")
+    assert result == {"user.name": "John"}
+
+
+def test_flatten_expanded_dict_mixed_types() -> None:
+    """mixed scalar, dict, and list values are handled."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict(
+        {
+            "a": 1,
+            "b": {"c": 2, "d": {"e": "deep"}},
+            "f": [1, 2, 3],
+            "g": None,
+        }
+    )
+    assert result["a"] == 1
+    assert result["b__c"] == 2
+    assert result["b__d__e"] == "deep"
+    assert isinstance(result["f"], str)
+    assert result["g"] is None
+
+
+def test_flatten_expanded_dict_empty_dict() -> None:
+    """empty dict returns empty result."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict({})
+    assert result == {}
+
+
+def test_flatten_expanded_dict_with_naming() -> None:
+    """naming convention normalizes key segments."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+    from dlt.common.schema import Schema
+
+    schema = Schema("test")
+    naming = schema.naming
+
+    result = flatten_expanded_dict({"User Name": {"Email Address": "john@test.com"}}, naming=naming)
+    assert "user_name__email_address" in result
+    assert result["user_name__email_address"] == "john@test.com"
+
+
+def test_flatten_expanded_dict_boolean() -> None:
+    """boolean values pass through as-is."""
+    from dlt.common.normalizers.json.expansion import flatten_expanded_dict
+
+    result = flatten_expanded_dict({"active": True, "deleted": False})
+    assert result["active"] is True
+    assert result["deleted"] is False

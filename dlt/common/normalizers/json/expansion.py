@@ -92,6 +92,40 @@ def apply_force_string(data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def flatten_expanded_dict(
+    data: Dict[str, Any],
+    separator: str = "__",
+    naming: Any = None,
+) -> Dict[str, Any]:
+    """Recursively flatten a dict into flat key-value pairs.
+
+    Nested dicts are flattened with keys joined by `separator`. Lists are
+    serialized to JSON strings (no child-table support). Scalars and `None`
+    pass through unchanged.
+
+    Args:
+        data: The dict to flatten.
+        separator: String joining nested key paths.
+        naming: Optional NamingConvention whose `normalize_path` is applied to each key segment.
+    """
+    result: Dict[str, Any] = {}
+    stack: List[Tuple[Dict[str, Any], str]] = [(data, "")]
+    while stack:
+        current, prefix = stack.pop()
+        for k, v in current.items():
+            norm_k = naming.normalize_path(k) if naming else k
+            flat_key = f"{prefix}{separator}{norm_k}" if prefix else norm_k
+            if v is None:
+                result[flat_key] = None
+            elif isinstance(v, dict):
+                stack.append((v, flat_key))
+            elif isinstance(v, list):
+                result[flat_key] = json.dumps(v)
+            else:
+                result[flat_key] = v
+    return result
+
+
 def expand_json_column(
     raw_value: Any,
     flatten_spec: Union[bool, List[str], None],
