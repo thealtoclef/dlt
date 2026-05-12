@@ -459,3 +459,149 @@ def test_warning_from_arrow_normalizer_on_null_column(
         assert expected_warning in logger_spy.call_args_list[0][0][0]
     else:
         logger_spy.assert_not_called()
+
+
+def test_arrow_json_expansion_basic() -> None:
+    """Arrow table with JSON string column + x-json-flatten:True expands into __ sub-columns."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table(
+        {
+            "id": [1, 2],
+            "metadata": [
+                '{"name": "John", "email": "john@example.com"}',
+                '{"name": "Jane", "email": "jane@example.com"}',
+            ],
+        }
+    )
+
+    @dlt.resource(columns=with_json_flatten({"metadata": True}))
+    def my_resource():
+        yield table
+
+    pipeline = dlt.pipeline("arrow_json_expand_basic", destination="duckdb", dev_mode=True)
+    info = pipeline.run(my_resource())
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql(
+            "SELECT id, metadata__name, metadata__email FROM my_resource ORDER BY id"
+        )
+        assert rows[0] == (1, "John", "john@example.com")
+        assert rows[1] == (2, "Jane", "jane@example.com")
+
+
+def test_arrow_json_expansion_keep_original() -> None:
+    """Arrow + x-json-flatten + x-json-keep-original preserves the original JSON string."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table(
+        {
+            "id": [1],
+            "metadata": ['{"name": "John", "email": "john@example.com"}'],
+        }
+    )
+
+    @dlt.resource(columns=with_json_flatten({"metadata": True}, keep_original=True))
+    def my_resource():
+        yield table
+
+    pipeline = dlt.pipeline("arrow_json_expand_keep_orig", destination="duckdb", dev_mode=True)
+    info = pipeline.run(my_resource())
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql(
+            "SELECT id, metadata, metadata__name, metadata__email FROM my_resource"
+        )
+        assert rows[0][0] == 1
+        assert rows[0][1] == '{"name": "John", "email": "john@example.com"}'
+        assert rows[0][2] == "John"
+        assert rows[0][3] == "john@example.com"
+
+
+def test_arrow_json_expansion_path_based() -> None:
+    """Arrow + path-based x-json-flatten only expands specified paths."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table(
+        {
+            "id": [1],
+            "data": ['{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'],
+        }
+    )
+
+    @dlt.resource(columns=with_json_flatten({"data": ["user.name"]}))
+    def my_resource():
+        yield table
+
+    pipeline = dlt.pipeline("arrow_json_expand_path", destination="duckdb", dev_mode=True)
+    info = pipeline.run(my_resource())
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql("SELECT id, data__user__name FROM my_resource")
+        assert rows[0] == (1, "John")
+
+        # verify excluded paths are NOT present
+        all_rows = client.execute_sql("SELECT * FROM my_resource")
+        # use returned column names from DuckDB
+        result = client.execute_sql(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='my_resource'"
+        )
+        columns = [r[0] for r in result]
+        assert "data__user__age" not in columns
+        assert "data__timestamp" not in columns
+
+
+def test_arrow_json_expansion_force_string() -> None:
+    """Arrow + x-json-flatten-force-string coerces all scalar values to str."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table(
+        {
+            "id": [1],
+            "data": ['{"count": 42, "score": 3.14, "active": true}'],
+        }
+    )
+
+    @dlt.resource(columns=with_json_flatten({"data": True}, force_string=True))
+    def my_resource():
+        yield table
+
+    pipeline = dlt.pipeline("arrow_json_expand_fs", destination="duckdb", dev_mode=True)
+    info = pipeline.run(my_resource())
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql(
+            "SELECT id, data__count, data__score, data__active FROM my_resource"
+        )
+        # All expanded values should be strings
+        assert rows[0] == (1, "42", "3.14", "True")
+
+
+def test_arrow_json_expansion_no_hints_no_overhead() -> None:
+    """Arrow table without x-json-flatten hints passes through unchanged (regression)."""
+    table = pa.table(
+        {
+            "id": [1, 2],
+            "metadata": [
+                '{"name": "John"}',
+                '{"name": "Jane"}',
+            ],
+        }
+    )
+
+    @dlt.resource
+    def my_resource():
+        yield table
+
+    pipeline = dlt.pipeline("arrow_json_no_hints", destination="duckdb", dev_mode=True)
+    info = pipeline.run(my_resource())
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql("SELECT id, metadata FROM my_resource ORDER BY id")
+        assert rows[0] == (1, '{"name": "John"}')
+        assert rows[1] == (2, '{"name": "Jane"}')
+        result = client.execute_sql(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='my_resource'"
+        )
+        columns = [r[0] for r in result]
+        assert "metadata__name" not in columns
