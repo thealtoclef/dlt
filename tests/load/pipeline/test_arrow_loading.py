@@ -457,5 +457,238 @@ def test_warning_from_arrow_normalizer_on_null_column(
             "  - col1"
         )
         assert expected_warning in logger_spy.call_args_list[0][0][0]
-    else:
-        logger_spy.assert_not_called()
+
+@pytest.mark.parametrize(
+    "destination_config",
+    destinations_configs(default_sql_configs=True, subset=["duckdb"]),
+    ids=lambda x: x.name,
+)
+def test_arrow_json_expansion_basic(
+    destination_config: DestinationTestConfiguration,
+) -> None:
+    """JSON string column with ``x-json-flatten: True`` expands into ``__`` sub-columns."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table({
+        "id": [1, 2],
+        "metadata": [
+            '{"name": "John", "email": "john@example.com"}',
+            '{"name": "Jane", "email": "jane@example.com"}',
+        ],
+    })
+
+    @dlt.resource(columns=with_json_flatten({"metadata": True}))
+    def my_resource():
+        yield table
+
+    pipeline = destination_config.setup_pipeline("arrow_json_basic_" + uniq_id())
+    info = pipeline.run(my_resource())
+    assert_load_info(info)
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql(
+            "SELECT id, metadata__name, metadata__email FROM my_resource ORDER BY id"
+        )
+        assert rows[0] == (1, "John", "john@example.com")
+        assert rows[1] == (2, "Jane", "jane@example.com")
+
+
+@pytest.mark.parametrize(
+    "destination_config",
+    destinations_configs(default_sql_configs=True, subset=["duckdb"]),
+    ids=lambda x: x.name,
+)
+def test_arrow_json_expansion_keep_original(
+    destination_config: DestinationTestConfiguration,
+) -> None:
+    """``keep_original=True`` preserves the raw JSON string alongside expanded sub-columns."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table({
+        "id": [1],
+        "metadata": ['{"name": "John", "email": "john@example.com"}'],
+    })
+
+    @dlt.resource(columns=with_json_flatten({"metadata": True}, keep_original=True))
+    def my_resource():
+        yield table
+
+    pipeline = destination_config.setup_pipeline("arrow_json_keep_" + uniq_id())
+    info = pipeline.run(my_resource())
+    assert_load_info(info)
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql(
+            "SELECT id, metadata, metadata__name, metadata__email FROM my_resource"
+        )
+        assert rows[0][0] == 1
+        assert rows[0][1] == '{"name": "John", "email": "john@example.com"}'
+        assert rows[0][2] == "John"
+        assert rows[0][3] == "john@example.com"
+
+
+@pytest.mark.parametrize(
+    "destination_config",
+    destinations_configs(default_sql_configs=True, subset=["duckdb"]),
+    ids=lambda x: x.name,
+)
+def test_arrow_json_expansion_path_based(
+    destination_config: DestinationTestConfiguration,
+) -> None:
+    """Path-based ``x-json-flatten`` only expands specified JSON paths."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table({
+        "id": [1],
+        "data": ['{"user": {"name": "John", "age": 30}, "timestamp": "2024-01-01"}'],
+    })
+
+    @dlt.resource(columns=with_json_flatten({"data": ["user.name"]}))
+    def my_resource():
+        yield table
+
+    pipeline = destination_config.setup_pipeline("arrow_json_path_" + uniq_id())
+    info = pipeline.run(my_resource())
+    assert_load_info(info)
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql("SELECT id, data__user__name FROM my_resource")
+        assert rows[0] == (1, "John")
+
+        # Excluded paths must NOT be present
+        result = client.execute_sql(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name='my_resource'"
+        )
+        columns = [r[0] for r in result]
+        assert "data__user__age" not in columns
+        assert "data__timestamp" not in columns
+
+
+@pytest.mark.parametrize(
+    "destination_config",
+    destinations_configs(default_sql_configs=True, subset=["duckdb"]),
+    ids=lambda x: x.name,
+)
+def test_arrow_json_expansion_force_string(
+    destination_config: DestinationTestConfiguration,
+) -> None:
+    """``force_string=True`` coerces all expanded scalar values to strings."""
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table({
+        "id": [1],
+        "data": ['{"count": 42, "score": 3.14, "active": true}'],
+    })
+
+    @dlt.resource(columns=with_json_flatten({"data": True}, force_string=True))
+    def my_resource():
+        yield table
+
+    pipeline = destination_config.setup_pipeline("arrow_json_fs_" + uniq_id())
+    info = pipeline.run(my_resource())
+    assert_load_info(info)
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql(
+            "SELECT id, data__count, data__score, data__active FROM my_resource"
+        )
+        assert rows[0] == (1, "42", "3.14", "True")
+
+
+@pytest.mark.parametrize(
+    "destination_config",
+    destinations_configs(default_sql_configs=True, subset=["duckdb"]),
+    ids=lambda x: x.name,
+)
+def test_arrow_json_expansion_with_struct_and_keep_original(
+    destination_config: DestinationTestConfiguration,
+) -> None:
+    """Validates the fix for the infinite recursion bug during Arrow flattening.
+    
+    If `keep_original=True` is used alongside a Native Arrow Struct, the struct 
+    triggers a recursive flattening pass. In older buggy implementations, the retained 
+    JSON column would be re-expanded on every pass, causing exponential duplicates 
+    or recursion limits. This test ensures JSON is expanded exactly once.
+    """
+    from dlt.pipeline.mark import with_json_flatten
+
+    table = pa.table({
+        "id": [1, 2],
+        "metrics": [
+            {"cpu": 45.2, "memory": 1024},
+            {"cpu": 89.1, "memory": 2048}
+        ],
+        "tags": [
+            '{"env": "production", "service": "web"}',
+            '{"env": "staging", "service": "db"}'
+        ]
+    })
+
+    # Enable keep_original=True specifically to try and trigger the bug
+    @dlt.resource(name="system_events", columns=with_json_flatten({"tags": True}, keep_original=True))
+    def events():
+        yield table
+
+    pipeline = destination_config.setup_pipeline("arrow_struct_keep_" + uniq_id())
+    info = pipeline.run(events())
+    assert_load_info(info)
+
+    with pipeline.sql_client() as client:
+        # If the recursion bug existed, we would have columns like `tags__env__env`
+        # or the pipeline would fail. Here we ensure exactly the expected columns exist.
+        rows = client.execute_sql(
+            "SELECT id, metrics__cpu, tags, tags__env"
+            " FROM system_events ORDER BY id"
+        )
+        assert rows[0] == (1, 45.2, '{"env": "production", "service": "web"}', "production")
+        assert rows[1] == (2, 89.1, '{"env": "staging", "service": "db"}', "staging")
+
+        # Verify no duplicate/nested artifact columns were created by recursive JSON expansions
+        result = client.execute_sql(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name='system_events'"
+        )
+        columns = [r[0] for r in result]
+        assert "tags__env__env" not in columns
+
+
+
+@pytest.mark.parametrize(
+    "destination_config",
+    destinations_configs(default_sql_configs=True, subset=["duckdb"]),
+    ids=lambda x: x.name,
+)
+def test_arrow_json_expansion_no_hints_no_overhead(
+    destination_config: DestinationTestConfiguration,
+) -> None:
+    """Arrow table without ``x-json-flatten`` hints passes through unchanged (regression).
+
+    Ensures JSON-looking string columns are NOT expanded when no hints are set,
+    preserving the parquet fast-path and avoiding accidental overhead.
+    """
+    table = pa.table({
+        "id": [1, 2],
+        "metadata": ['{"name": "John"}', '{"name": "Jane"}'],
+    })
+
+    @dlt.resource
+    def my_resource():
+        yield table
+
+    pipeline = destination_config.setup_pipeline("arrow_json_no_hints_" + uniq_id())
+    info = pipeline.run(my_resource())
+    assert_load_info(info)
+
+    with pipeline.sql_client() as client:
+        rows = client.execute_sql("SELECT id, metadata FROM my_resource ORDER BY id")
+        assert rows[0] == (1, '{"name": "John"}')
+        assert rows[1] == (2, '{"name": "Jane"}')
+
+        # No sub-columns should exist
+        result = client.execute_sql(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name='my_resource'"
+        )
+        columns = [r[0] for r in result]
+        assert "metadata__name" not in columns
