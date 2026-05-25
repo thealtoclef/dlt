@@ -173,6 +173,7 @@ TColumnProcessingHints = TypedDict(
         "x-json-keep-original": Optional[bool],
         "x-json-flatten-force-string": Optional[bool],
         "x-json-flatten-max-depth": Optional[int],
+        "x-json-flatten-schema-inference": Optional[Union[str, int]],
     },
     total=False,
 )

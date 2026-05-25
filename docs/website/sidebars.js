@@ -98,6 +98,7 @@ const sidebars = {
             'general-usage/schema-contracts',
             'general-usage/schema-evolution',
             'general-usage/naming-convention',
+            'general-usage/schema/arrow-json-flatten',
           ]
         },
         'general-usage/glossary'

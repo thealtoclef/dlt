@@ -1,9 +1,10 @@
-from typing import List, Dict, Set, Any
+from typing import List, Dict, Set, Any, Optional, cast
 
 from dlt.common import logger
 from dlt.common.data_writers.writers import ArrowToObjectAdapter
 from dlt.common.json import json
 from dlt.common.metrics import DataWriterMetrics
+from dlt.common.normalizers.json.helpers import get_json_expansion_columns
 from dlt.common.normalizers.json.relational import DataItemNormalizer as RelationalNormalizer
 from dlt.common.normalizers.utils import generate_dlt_ids
 from dlt.common.schema.typing import C_DLT_ID
@@ -22,9 +23,15 @@ from dlt.normalize.items_normalizers.base import ItemsNormalizer
 try:
     from dlt.common.libs import pyarrow
     from dlt.common.libs.pyarrow import pyarrow as pa
+    from dlt.common.libs.pyarrow_json_flatten import (
+        flatten_arrow_batch,
+        prescan_string_json_schemas,
+    )
 except MissingDependencyException:
     pyarrow = None
     pa = None
+    flatten_arrow_batch = None
+    prescan_string_json_schemas = None
 
 
 class ArrowItemsNormalizer(ItemsNormalizer):
@@ -52,6 +59,8 @@ class ArrowItemsNormalizer(ItemsNormalizer):
             collector=collector,
         )
         self._null_only_columns: Dict[str, Set[str]] = {}
+        self._duckdb_connection: Optional[Any] = None
+        self._string_schema_locks: Dict[str, Dict[str, Any]] = {}
 
     @property
     def null_only_columns(self) -> Dict[str, Set[str]]:
@@ -72,6 +81,114 @@ class ArrowItemsNormalizer(ItemsNormalizer):
         for name in null_col_names:
             normalized_names.add(self.schema.naming.normalize_path(name))
         self._null_only_columns.setdefault(root_table_name, set()).update(normalized_names)
+
+    def _get_duckdb_connection(self) -> Any:
+        if self._duckdb_connection is not None:
+            return self._duckdb_connection
+        from dlt.common.libs.duckdb import make_connection
+
+        arrow_cfg = self.config.arrow_normalizer
+        self._duckdb_connection = make_connection(
+            memory_limit=arrow_cfg.duckdb_memory_limit,
+            threads=arrow_cfg.duckdb_threads,
+        )
+        return self._duckdb_connection
+
+    def close(self) -> None:
+        if self._duckdb_connection is not None:
+            try:
+                self._duckdb_connection.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._duckdb_connection = None
+        super().close()
+
+    def _maybe_prescan_schemas(
+        self,
+        extracted_items_file: str,
+        root_table_name: str,
+        expansion_specs: Dict[str, Any],
+    ) -> None:
+        """Pre-scans the parquet file to lock union struct types for full-scan / int modes.
+
+        Only string-JSON columns with `schema_inference="full-scan"` or an integer sample
+        size require pre-scanning. The result is stored in `_string_schema_locks` so the
+        downstream batch loop picks it up.
+        """
+        to_scan: Dict[str, Any] = {}
+        table = self.schema.tables.get(root_table_name) or {"columns": {}}
+        for col_name, spec in expansion_specs.items():
+            mode = spec.schema_inference
+            if mode is None or mode == "incremental":
+                continue
+            if spec.flatten_spec is not True:
+                continue
+            col = table["columns"].get(col_name) or {}
+            declared = col.get("data_type")
+            # only string-JSON inputs need pre-scan; struct inputs already have a type
+            if declared and declared not in ("text", "json"):
+                continue
+            to_scan[col_name] = spec
+        if not to_scan:
+            return
+        with self.normalize_storage.extracted_packages.storage.open_file(
+            extracted_items_file, "rb"
+        ) as f:
+            locked = prescan_string_json_schemas(f, to_scan)
+        if not locked:
+            return
+        locks = self._string_schema_locks.setdefault(root_table_name, {})
+        locks.update(locked)
+
+    def _maybe_flatten_batch(
+        self,
+        batch: Any,
+        root_table_name: str,
+        schema_update: TSchemaUpdate,
+        expansion_specs: Dict[str, Any],
+    ) -> Any:
+        """Applies x-json-* expansion hints to an arrow batch, returns the rewritten batch.
+
+        Updates the dlt schema in place when new flattened columns are discovered, and
+        appends a partial table to `schema_update` so the worker can propagate the
+        schema change to the load package.
+
+        `expansion_specs` must be captured by the caller before the per-batch loop —
+        this method deletes consumed source columns from the schema, so re-reading
+        the hints from the schema between batches would lose them after batch 1 and
+        cause subsequent row groups to pass through un-flattened.
+        """
+        if not expansion_specs:
+            return batch
+
+        engine = self.config.arrow_normalizer.json_engine
+        duckdb_conn = self._get_duckdb_connection() if engine == "duckdb" else None
+        locks = self._string_schema_locks.setdefault(root_table_name, {})
+        flattened, partial_table = flatten_arrow_batch(
+            batch,
+            table_name=root_table_name,
+            expansion_specs=expansion_specs,
+            naming=self.schema.naming,
+            engine=engine,  # type: ignore[arg-type]
+            duckdb_connection=duckdb_conn,
+            string_schema_locks=locks,
+        )
+        # remove consumed source columns from the dlt schema so the downstream
+        # normalize step does not re-introduce them as empty null columns
+        table = self.schema.tables.get(root_table_name)
+        if table is not None:
+            for col_name, spec in expansion_specs.items():
+                if spec.keep_original:
+                    continue
+                if col_name in table["columns"] and col_name not in flattened.schema.names:
+                    del table["columns"][col_name]
+
+        if partial_table.get("columns"):
+            new_partial = normalize_table_identifiers(partial_table, self.schema.naming)
+            self.schema.update_table(new_partial, normalize_identifiers=False)
+            schema_update.setdefault(root_table_name, []).append(new_partial)
+
+        return flattened
 
     def _write_with_dlt_columns(
         self,
@@ -108,6 +225,10 @@ class ArrowItemsNormalizer(ItemsNormalizer):
             )
 
         items_count = 0
+        expansion_specs = get_json_expansion_columns(schema, root_table_name)
+        has_expansion_hints = bool(expansion_specs)
+        if has_expansion_hints:
+            self._maybe_prescan_schemas(extracted_items_file, root_table_name, expansion_specs)
         columns_schema = schema.get_table_columns(root_table_name)
         # if we use adapter to convert arrow to dicts, then normalization is not necessary
         is_native_arrow_writer = not issubclass(self.item_storage.writer_cls, ArrowToObjectAdapter)
@@ -120,6 +241,13 @@ class ArrowItemsNormalizer(ItemsNormalizer):
                 f, new_columns, row_groups_per_read=self.REWRITE_ROW_GROUPS
             ):
                 self._maybe_cancel()
+                if has_expansion_hints:
+                    batch = self._maybe_flatten_batch(
+                        batch, root_table_name, schema_update, expansion_specs
+                    )
+                    # schema may have grown — recompute downstream caches
+                    columns_schema = schema.get_table_columns(root_table_name)
+                    should_normalize = None
                 items_count += batch.num_rows
                 self._report_progress(root_table_name, batch.num_rows)
                 # we may need to normalize
@@ -173,9 +301,14 @@ class ArrowItemsNormalizer(ItemsNormalizer):
         self._collect_null_columns_from_arrow_metadata(arrow_schema, root_table_name)
 
         add_dlt_id = self.config.parquet_normalizer.add_dlt_id
+        has_expansion_hints = bool(get_json_expansion_columns(self.schema, root_table_name))
         # TODO: add dlt id only if not present in table
         # if we need to add any columns or the file format is not parquet, we can't just import files
-        must_rewrite = add_dlt_id or self.item_storage.writer_spec.file_format != "parquet"
+        must_rewrite = (
+            add_dlt_id
+            or has_expansion_hints
+            or self.item_storage.writer_spec.file_format != "parquet"
+        )
         if not must_rewrite:
             # in rare cases normalization may be needed
             must_rewrite = pyarrow.should_normalize_arrow_schema(
