@@ -164,6 +164,12 @@ class ArrowItemsNormalizer(ItemsNormalizer):
         engine = self.config.arrow_normalizer.json_engine
         duckdb_conn = self._get_duckdb_connection() if engine == "duckdb" else None
         locks = self._string_schema_locks.setdefault(root_table_name, {})
+        destination_capabilities = self.config.destination_capabilities
+        destination_casefold_identifier = (
+            str.casefold
+            if destination_capabilities and destination_capabilities.sqlglot_dialect == "bigquery"
+            else None
+        )
         flattened, partial_table = flatten_arrow_batch(
             batch,
             table_name=root_table_name,
@@ -172,6 +178,7 @@ class ArrowItemsNormalizer(ItemsNormalizer):
             engine=engine,  # type: ignore[arg-type]
             duckdb_connection=duckdb_conn,
             string_schema_locks=locks,
+            destination_casefold_identifier=destination_casefold_identifier,
         )
         # remove consumed source columns from the dlt schema so the downstream
         # normalize step does not re-introduce them as empty null columns

@@ -8,6 +8,7 @@ import pyarrow as pa
 from dlt.common.libs.pyarrow import NameNormalizationCollision
 from dlt.common.libs.pyarrow_json_flatten import flatten_arrow_batch
 from dlt.common.normalizers.json.helpers import TJsonColumnExpansionSpec
+from dlt.common.normalizers.naming.duck_case import NamingConvention as DuckCase
 from dlt.common.normalizers.naming.snake_case import NamingConvention as SnakeCase
 
 
@@ -69,6 +70,106 @@ def test_struct_flatten_normalizes_camelcase_child_fields() -> None:
     assert "request__card_type" in partial["columns"]
     assert "request__ref_id" in partial["columns"]
     assert "request__user_id" in partial["columns"]
+
+
+def test_flattened_columns_include_original_path_description() -> None:
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {"request": {"cardType": "visa", "nested": {"RefId": "abc"}}},
+        ]
+    )
+    _, partial = flatten_arrow_batch(
+        batch,
+        table_name="t",
+        expansion_specs={"request": _spec()},
+        naming=DuckCase(),
+    )
+
+    assert (
+        partial["columns"]["request__cardType"]["description"]
+        == "Flattened from original path: request.cardType"
+    )
+    assert (
+        partial["columns"]["request__nested__RefId"]["description"]
+        == "Flattened from original path: request.nested.RefId"
+    )
+
+
+def test_duck_case_bigquery_casefold_unsafe_names_get_deterministic_suffix() -> None:
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {"request": {"refId": "lower", "RefId": "upper"}},
+        ]
+    )
+    out, partial = flatten_arrow_batch(
+        batch,
+        table_name="t",
+        expansion_specs={"request": _spec()},
+        naming=DuckCase(),
+        destination_casefold_identifier=str.casefold,
+    )
+
+    assert len(out.schema.names) == 2
+    assert all("__c_" in name for name in out.schema.names)
+    assert len({name.casefold() for name in out.schema.names}) == 2
+
+    ref_id_col = [name for name in out.schema.names if name.startswith("request__refId__c_")][0]
+    upper_ref_id_col = [name for name in out.schema.names if name.startswith("request__RefId__c_")][
+        0
+    ]
+    assert out.column(ref_id_col).to_pylist() == ["lower"]
+    assert out.column(upper_ref_id_col).to_pylist() == ["upper"]
+    assert (
+        partial["columns"][ref_id_col]["description"]
+        == "Flattened from original path: request.refId"
+    )
+    assert (
+        partial["columns"][upper_ref_id_col]["description"]
+        == "Flattened from original path: request.RefId"
+    )
+
+
+def test_duck_case_bigquery_suffixes_casefold_unsafe_single_name() -> None:
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {"request": {"refId": "abc"}},
+        ]
+    )
+    out, partial = flatten_arrow_batch(
+        batch,
+        table_name="t",
+        expansion_specs={"request": _spec()},
+        naming=DuckCase(),
+        destination_casefold_identifier=str.casefold,
+    )
+
+    assert len(out.schema.names) == 1
+    assert out.schema.names[0].startswith("request__refId__c_")
+    assert out.column(out.schema.names[0]).to_pylist() == ["abc"]
+    assert (
+        partial["columns"][out.schema.names[0]]["description"]
+        == "Flattened from original path: request.refId"
+    )
+
+
+def test_bigquery_casefold_suffix_collision_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dlt.common.libs.pyarrow_json_flatten as flatten_mod
+
+    monkeypatch.setattr(flatten_mod, "_case_collision_tag", lambda _: "same")
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {"request": {"refId": "lower", "RefId": "upper"}},
+        ]
+    )
+
+    with pytest.raises(NameNormalizationCollision):
+        flatten_arrow_batch(
+            batch,
+            table_name="t",
+            expansion_specs={"request": _spec()},
+            naming=DuckCase(),
+            destination_casefold_identifier=str.casefold,
+        )
 
 
 def test_struct_path_list_projection() -> None:

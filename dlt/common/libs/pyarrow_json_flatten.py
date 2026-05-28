@@ -11,7 +11,8 @@ vectorized string-JSON parsing and a struct-to-JSON serializer used by the
 opt-in `keep_original` / `max_depth` divergences for struct inputs.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+import hashlib
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from dlt.common import logger
 from dlt.common.libs.pyarrow import (
@@ -57,6 +58,7 @@ def flatten_arrow_batch(
     engine: TJsonFlattenEngine = "pyarrow",
     duckdb_connection: Optional[Any] = None,
     string_schema_locks: Optional[Dict[str, Any]] = None,
+    destination_casefold_identifier: Optional[Callable[[str], str]] = None,
 ) -> Tuple[Any, TPartialTableSchema]:
     """Applies `x-json-*` hints to an arrow batch and returns the rewritten batch.
 
@@ -73,6 +75,9 @@ def flatten_arrow_batch(
             `engine='duckdb'` and any work needs vectorized JSON ops.
         string_schema_locks (Optional[Dict[str, Any]]): Per-source-column locked
             struct types for streaming string-JSON inference. Updated in place.
+        destination_casefold_identifier (Optional[Callable[[str], str]]): Destination
+            column-name casefold function. When set, flattened columns that are not
+            stable under casefolding get deterministic `__c_<hash>` suffixes.
 
     Returns:
         Tuple[Any, TPartialTableSchema]: The flattened batch (same type as input —
@@ -159,6 +164,9 @@ def flatten_arrow_batch(
             _push_column(name, preserved_source, new_field_names, new_arrays, seen_names)
             new_columns_schema[name] = cast(TColumnSchema, {"name": name, "data_type": "text"})
 
+        emitted = _resolve_casefold_collisions(
+            emitted, naming, destination_casefold_identifier, seen_names
+        )
         for emitted_name, emitted_array, emitted_col_schema in emitted:
             if emitted_name in seen_names:
                 raise NameNormalizationCollision(
@@ -253,10 +261,11 @@ def _flatten_struct_column(
                         depth=len(segments) + 1,
                         engine=engine,
                         duckdb_connection=duckdb_connection,
+                        original_path=(parent_name, *segments),
                     )
                 )
             else:
-                emitted.append(_finalize_leaf(leaf_name, extracted, spec))
+                emitted.append(_finalize_leaf(leaf_name, extracted, spec, (parent_name, *segments)))
         return emitted
 
     return []
@@ -270,6 +279,7 @@ def _recurse_struct(
     depth: int,
     engine: TJsonFlattenEngine,
     duckdb_connection: Optional[Any],
+    original_path: Optional[Tuple[str, ...]] = None,
 ) -> List[Tuple[str, Any, TColumnSchema]]:
     if pa.types.is_null(struct_array.type):
         return []
@@ -277,8 +287,14 @@ def _recurse_struct(
     if spec.max_depth is not None and depth > spec.max_depth:
         if engine == "duckdb":
             string_array = _struct_to_json_string(struct_array, duckdb_connection)
-            return [_finalize_leaf(parent_name, string_array, spec)]
-        return [(parent_name, struct_array, {"data_type": "json"})]
+            return [_finalize_leaf(parent_name, string_array, spec, original_path)]
+        return [
+            (
+                parent_name,
+                struct_array,
+                _with_flatten_description({"data_type": "json"}, original_path),
+            )
+        ]
 
     emitted: List[Tuple[str, Any, TColumnSchema]] = []
     struct_type = struct_array.type
@@ -288,6 +304,7 @@ def _recurse_struct(
         child_name = naming.shorten_fragments(
             parent_name, naming.normalize_identifier(child_field.name)
         )
+        child_path = (*(original_path or (parent_name,)), child_field.name)
         if pa.types.is_struct(child_array.type):
             emitted.extend(
                 _recurse_struct(
@@ -298,10 +315,11 @@ def _recurse_struct(
                     depth=depth + 1,
                     engine=engine,
                     duckdb_connection=duckdb_connection,
+                    original_path=child_path,
                 )
             )
         else:
-            emitted.append(_finalize_leaf(child_name, child_array, spec))
+            emitted.append(_finalize_leaf(child_name, child_array, spec, child_path))
     return emitted
 
 
@@ -318,18 +336,106 @@ def _extract_struct_path(struct_array: Any, segments: List[str]) -> Optional[Any
 
 
 def _finalize_leaf(
-    name: str, array: Any, spec: TJsonColumnExpansionSpec
+    name: str,
+    array: Any,
+    spec: TJsonColumnExpansionSpec,
+    original_path: Optional[Tuple[str, ...]] = None,
 ) -> Tuple[str, Any, TColumnSchema]:
     if spec.force_string:
         array = _cast_array_to_string(array)
     col_schema: TColumnSchema
     try:
-        col_schema = cast(TColumnSchema, get_column_type_from_py_arrow(array.type))
+        col_schema = cast(TColumnSchema, dict(get_column_type_from_py_arrow(array.type)))
     except Exception:  # noqa: BLE001
         col_schema = cast(TColumnSchema, dict(_FLATTENED_TYPE_FALLBACK))
     if not col_schema:
         col_schema = cast(TColumnSchema, dict(_FLATTENED_TYPE_FALLBACK))
+    col_schema = _with_flatten_description(col_schema, original_path)
     return name, array, col_schema
+
+
+def _with_flatten_description(
+    col_schema: TColumnSchema, original_path: Optional[Tuple[str, ...]]
+) -> TColumnSchema:
+    if original_path and "description" not in col_schema:
+        col_schema = cast(TColumnSchema, dict(col_schema))
+        col_schema["description"] = f"Flattened from original path: {'.'.join(original_path)}"
+    return col_schema
+
+
+def _resolve_casefold_collisions(
+    emitted: List[TFlattenEmission],
+    naming: NamingConvention,
+    casefold_identifier: Optional[Callable[[str], str]],
+    seen_names: Set[str],
+) -> List[TFlattenEmission]:
+    """Suffix flattened names that are unsafe under destination casefolding rules.
+
+    For BigQuery, column names cannot differ only by case. We suffix all flattened
+    names whose casefolded representation differs from the emitted name, not only
+    names currently observed in a collision group. That keeps the physical name for
+    `request.refId` stable even if `request.RefId` appears in a later batch.
+    """
+    if casefold_identifier is None or not emitted:
+        return emitted
+
+    existing_folded = {casefold_identifier(n) for n in seen_names}
+    groups: Dict[str, List[int]] = {}
+    for idx, (name, _, _) in enumerate(emitted):
+        groups.setdefault(casefold_identifier(name), []).append(idx)
+
+    rename_indexes: Set[int] = set()
+    for idx, (name, _, _) in enumerate(emitted):
+        if casefold_identifier(name) != name:
+            rename_indexes.add(idx)
+    for folded_name, indexes in groups.items():
+        if len(indexes) > 1 or folded_name in existing_folded:
+            rename_indexes.update(indexes)
+
+    if not rename_indexes:
+        return emitted
+
+    resolved: List[TFlattenEmission] = []
+    for idx, (name, array, col_schema) in enumerate(emitted):
+        if idx in rename_indexes:
+            original_path = _original_path_from_description(col_schema) or name
+            name = _case_collision_name(name, original_path, naming)
+        resolved.append((name, array, col_schema))
+    _verify_casefold_unique(resolved, seen_names, casefold_identifier)
+    return resolved
+
+
+def _case_collision_name(name: str, original_path: str, naming: NamingConvention) -> str:
+    suffix = f"__c_{_case_collision_tag(original_path)}"
+    return naming.shorten_identifier(name + suffix, original_path, naming.max_length)
+
+
+def _case_collision_tag(original_path: str) -> str:
+    return hashlib.shake_128(original_path.encode("utf-8")).hexdigest(8)
+
+
+def _verify_casefold_unique(
+    emitted: List[TFlattenEmission],
+    seen_names: Set[str],
+    casefold_identifier: Callable[[str], str],
+) -> None:
+    folded_names = {casefold_identifier(n) for n in seen_names}
+    for name, _, _ in emitted:
+        folded_name = casefold_identifier(name)
+        if folded_name in folded_names:
+            raise NameNormalizationCollision(
+                f"Flattened column {name!r} collides with an existing destination column after"
+                " applying destination casefolding rules."
+            )
+        folded_names.add(folded_name)
+
+
+def _original_path_from_description(col_schema: TColumnSchema) -> Optional[str]:
+    description = col_schema.get("description")
+    prefix = "Flattened from original path: "
+    if description and description.startswith(prefix):
+        return description[len(prefix) :]
+    return None
 
 
 def _cast_array_to_string(array: Any) -> Any:

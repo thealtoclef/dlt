@@ -54,6 +54,44 @@ def test_struct_full_flatten_arrow() -> None:
     assert "meta__email" in schema_cols
 
 
+def test_struct_flatten_with_duck_case_preserves_original_keys() -> None:
+    duck_ = dlt.destinations.duckdb(naming_convention="duck_case")
+    pipeline = dlt.pipeline(
+        "arrow_flatten_" + uniq_id() + "_duck_case",
+        destination=duck_,
+    )
+    item = pa.table(
+        {
+            "request": [
+                {"cardType": "visa", "card_type": "visa_snake"},
+                {"cardType": "mc", "card_type": "mc_snake"},
+            ],
+        }
+    )
+
+    @dlt.resource(columns=dlt.mark.with_json_flatten({"request": True}))
+    def res():
+        yield item
+
+    pipeline.extract(res(), loader_file_format="parquet")
+    tbl = _normalize_and_read_first_job(pipeline, "res")
+
+    assert tbl.schema.names == ["request__cardType", "request__card_type"]
+    assert tbl.column("request__cardType").to_pylist() == ["visa", "mc"]
+    assert tbl.column("request__card_type").to_pylist() == ["visa_snake", "mc_snake"]
+    schema_cols = pipeline.default_schema.tables["res"]["columns"]
+    assert "request__cardType" in schema_cols
+    assert "request__card_type" in schema_cols
+    assert (
+        schema_cols["request__cardType"]["description"]
+        == "Flattened from original path: request.cardType"
+    )
+    assert (
+        schema_cols["request__card_type"]["description"]
+        == "Flattened from original path: request.card_type"
+    )
+
+
 def test_struct_path_list_flatten_arrow() -> None:
     pipeline = _make_pipeline("struct_paths")
     item = pa.table(
