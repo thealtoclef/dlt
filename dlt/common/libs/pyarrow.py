@@ -1,14 +1,18 @@
 import base64
 import gzip
+import hashlib
 from datetime import datetime, date, time  # noqa: I251
 from pendulum.tz import UTC
 from typing import (
     Any,
+    Callable,
     Dict,
     Mapping,
     NamedTuple,
-    Tuple,
     Optional,
+    Set,
+    Tuple,
+    TYPE_CHECKING,
     Union,
     Callable,
     Iterable,
@@ -19,7 +23,13 @@ from typing import (
 
 from dlt import version
 from dlt.common.exceptions import MissingDependencyException, DltException
-from dlt.common.schema.typing import C_DLT_ID, C_DLT_LOAD_ID, TColumnSchema, TTableSchemaColumns
+from dlt.common.schema.typing import (
+    C_DLT_ID,
+    C_DLT_LOAD_ID,
+    TColumnSchema,
+    TTableSchemaColumns,
+    TPartialTableSchema,
+)
 from dlt.common import logger
 from dlt.common.json import json, custom_encode, map_nested_values_in_place
 from dlt.common.destination.capabilities import DestinationCapabilitiesContext
@@ -28,6 +38,15 @@ from dlt.common.schema.utils import is_nullable_column, dlt_load_id_column
 from dlt.common.time import get_precision_from_datetime_unit
 from dlt.common.typing import AnyType, StrStr, TFileOrPath, TDataItems
 from dlt.common.normalizers.naming import NamingConvention
+from dlt.common.normalizers.json.expansion import (
+    apply_force_string,
+    filter_by_paths,
+    limit_depth,
+    parse_json_value,
+)
+
+if TYPE_CHECKING:
+    from dlt.common.normalizers.json.helpers import TJsonColumnExpansionSpec
 
 try:
     import pyarrow
@@ -49,6 +68,62 @@ import ctypes
 TAnyArrowItem = Union[pyarrow.Table, pyarrow.RecordBatch]
 
 ARROW_DECIMAL_MAX_PRECISION = 76
+
+MAX_RECURSION_DEPTH = 100
+"""Maximum recursion depth for flattening nested struct columns.
+
+Used by `flatten_struct_column` to prevent infinite recursion when encountering
+recursive struct types.
+"""
+
+_warned_json_expansion: Set[str] = set()
+"""Columns for which the JSON-expansion performance warning has already been logged."""
+
+
+def is_flattenable_column(
+    col_type: "pyarrow.DataType",
+    col_name: str,
+    column_hints: Optional[Dict[str, Any]],
+) -> bool:
+    """Checks whether a column can be flattened based on its type and hints.
+
+    A column is flattenable if it has a truthy `x-json-flatten` hint and its type
+    is `pyarrow.struct` or `pyarrow.string`. Other types with the hint are skipped
+    with a logged warning.
+
+    Args:
+        col_type: PyArrow data type of the column.
+        col_name: Name of the column.
+        column_hints: Column-level hints dict, typically from the schema.
+
+    Returns:
+        `True` if the column should be flattened, `False` otherwise.
+    """
+    if column_hints is None or not column_hints:
+        return False
+    if not column_hints.get("x-json-flatten"):
+        return False
+    if pyarrow.types.is_struct(col_type):
+        return True
+    if pyarrow.types.is_string(col_type) or pyarrow.types.is_large_string(col_type):
+        return True
+    logger.warning(
+        f"Column '{col_name}' has x-json-flatten hint but type {col_type} is not struct or string"
+        " — skipping"
+    )
+    return False
+
+
+def is_empty_struct(col_type: "pyarrow.DataType") -> bool:
+    """Checks whether a PyArrow struct type has zero fields.
+
+    Args:
+        col_type: PyArrow data type to check.
+
+    Returns:
+        `True` if `col_type` is a struct with no fields, `False` otherwise.
+    """
+    return bool(pyarrow.types.is_struct(col_type) and col_type.num_fields == 0)
 
 
 class UnsupportedArrowTypeException(DltException):
@@ -400,6 +475,53 @@ def deserialize_type(type_str: str) -> pyarrow.DataType:
         return schema.field(0).type
     else:
         raise TypeError("Cannot deserialize pyarrow type, only arrow-ipc is supported")
+
+
+def build_flatten_schema_update(
+    table_name: str,
+    flattened_columns: Dict[str, pyarrow.DataType],
+    naming: NamingConvention,
+) -> Dict[str, List[TPartialTableSchema]]:
+    """Builds a `TSchemaUpdate` from flattened columns with their Arrow data types.
+
+    For each column, infers dlt data type from the Arrow type and constructs a column
+    schema dict. If `flattened_columns` is empty, returns an empty dict.
+
+    Args:
+        table_name (str): Name of the root table to update.
+        flattened_columns (Dict[str, pyarrow.DataType]): Mapping of column names to their
+            Arrow data types.
+        naming (NamingConvention): Naming convention used to normalize column paths.
+
+    Returns:
+        Dict[str, List[Dict[str, Any]]]: `TSchemaUpdate` mapping the table name to a list
+            of partial table schemas, each containing `name` and `columns`.
+    """
+    if not flattened_columns:
+        return {}
+
+    columns_dict: Dict[str, TColumnSchema] = {}
+    for col_name, arrow_type in flattened_columns.items():
+        if pyarrow.types.is_struct(arrow_type):
+            type_result = get_nested_column_type_from_py_arrow(arrow_type)
+        else:
+            type_result = get_column_type_from_py_arrow(arrow_type)
+
+        normalized_name = naming.normalize_path(col_name)
+        columns_dict[normalized_name] = {
+            "name": normalized_name,
+            "nullable": True,
+            **type_result,
+        }
+
+    return {
+        table_name: [
+            {
+                "name": table_name,
+                "columns": columns_dict,
+            }
+        ]
+    }
 
 
 def remove_null_columns(item: TAnyArrowItem) -> TAnyArrowItem:
@@ -1461,3 +1583,494 @@ def cast_date64_columns_to_timestamp(tbl: pyarrow.Table, tz: Optional[str] = Non
 
     new_schema = pyarrow.schema(fields, metadata=tbl.schema.metadata)
     return pyarrow.Table.from_arrays(arrays, schema=new_schema)
+
+
+def flatten_struct_column(
+    table: TAnyArrowItem,
+    col_name: str,
+    naming: NamingConvention,
+    columns_schema: Dict[str, Any],
+    _r_lvl: int,
+    existing_names: Optional[Set[str]] = None,
+    struct_arr: Optional[pyarrow.Array] = None,
+    casefold_identifier: Optional[Callable[[str], str]] = None,
+) -> Tuple[pyarrow.Table, Dict[str, Any]]:
+    """Flattens a struct column into top-level `parent__child` columns using zero-copy
+    PyArrow operations.
+
+    Given a table with a struct column (e.g. `data` containing
+    `struct<name: string, age: int32>`), decomposes it into separate columns named
+    `data__name` and `data__age`, drops the original struct column, and returns the
+    updated table along with a mapping of new column names to their PyArrow data types.
+
+    Args:
+        table: A PyArrow Table or RecordBatch containing the struct column.
+            RecordBatch input is automatically converted to a Table.
+        col_name: The name of the struct column to flatten.
+        naming: A `NamingConvention` instance used to build child column names via
+            `shorten_fragments`.
+        columns_schema: Accumulator dict for collecting `{column_name: pyarrow.DataType}`
+            entries for downstream schema updates. Mutated in-place.
+        _r_lvl: Recursion depth remaining. Nested structs are flattened only when
+            `_r_lvl > 0`. When `_r_lvl <= 0` the struct is kept as-is.
+        existing_names: Optional set of existing column names in the table. When
+            provided, any child column whose computed name collides is skipped with
+            a warning instead of causing the parent struct to be skipped entirely.
+        struct_arr: Optional pre-combined struct array. When provided, skips reading
+            and combining the column from `table`, avoiding an intermediate table copy.
+
+    Returns:
+        Tuple of (updated_table, columns_schema). The updated table has the struct
+        column replaced by its top-level children; `columns_schema` contains type
+        entries for every newly added column.
+
+    Note:
+        - List fields are not unnested — they are added as-is.
+        - Null struct rows produce null child columns (via `pyarrow.compute.struct_field`).
+        - Uses `combine_chunks()` to handle chunked arrays efficiently.
+    """
+    if isinstance(table, pyarrow.RecordBatch):
+        table = pyarrow.Table.from_batches([table])
+    if struct_arr is not None:
+        struct_col = struct_arr
+    else:
+        struct_col = table.column(col_name).combine_chunks()
+
+    # enforce maximum recursion depth to prevent runaway flattening
+    if _r_lvl > MAX_RECURSION_DEPTH:
+        _r_lvl = MAX_RECURSION_DEPTH
+
+    # flatten struct to {full_path: array} dict (zero-copy field extraction, no temp tables)
+    new_columns, column_fields = _flatten_struct_to_columns(
+        struct_col, col_name, naming, columns_schema, _r_lvl, existing_names, casefold_identifier
+    )
+
+    # build final table: keep all columns except the one being flattened
+    # also skip columns that have the same names as flattened output (replace placeholders)
+    flat_column_names = set(new_columns.keys())
+    existing_arrays: List[pyarrow.Array] = []
+    existing_fields: List[pyarrow.Field] = []
+    for f in table.schema:
+        if f.name == col_name:
+            continue
+        if f.name in flat_column_names:
+            continue
+        existing_arrays.append(table.column(f.name))
+        existing_fields.append(f)
+    for c_name, c_array in new_columns.items():
+        c_field = column_fields[c_name]
+        existing_fields.append(
+            pyarrow.field(
+                c_name, c_field.type, nullable=c_field.nullable, metadata=c_field.metadata
+            )
+        )
+        existing_arrays.append(c_array)
+
+    new_schema = pyarrow.schema(existing_fields, metadata=table.schema.metadata)
+    table = pyarrow.Table.from_arrays(existing_arrays, schema=new_schema)
+
+    # extract just DataTypes for the downstream columns_schema (integration code puts DataType values)
+    new_entries = {name: field.type for name, field in column_fields.items()}
+    return table, new_entries
+
+
+def _resolve_casefold_collisions(
+    names: Dict[str, Any],
+    fields: Dict[str, Any],
+    parent_prefix: str,
+    naming: "NamingConvention",
+    casefold_identifier: Callable[[str], str],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Resolve names that collide under destination casefolding rules.
+
+    For case-insensitive destinations (e.g. BigQuery), two column names that
+    differ only by case (e.g. ``request__tuan`` and ``request__Tuan``) collide.
+    This function detects such collisions and appends a deterministic
+    ``__c_<hash>`` suffix to colliding names.
+    """
+    # collect all names and check which need renaming
+    rename: Dict[str, str] = {}  # old_name → new_name
+    name_list = list(names.keys())
+    folded: Dict[str, List[str]] = {}
+    for name in name_list:
+        folded.setdefault(casefold_identifier(name), []).append(name)
+
+    for name in name_list:
+        folded_name = casefold_identifier(name)
+        if folded_name != name or len(folded.get(folded_name, [])) > 1:
+            # name is unsafe under casefolding — derive deterministic suffix
+            renamed = _casefold_safe_name(name, naming)
+            if renamed != name:
+                rename[name] = renamed
+
+    if not rename:
+        return names, fields
+
+    new_names: Dict[str, Any] = {}
+    new_fields: Dict[str, Any] = {}
+    for name, value in names.items():
+        new_name = rename.get(name, name)
+        new_names[new_name] = value
+        new_fields[new_name] = fields[name]
+    return new_names, new_fields
+
+
+def _casefold_safe_name(name: str, naming: "NamingConvention") -> str:
+    """Append a deterministic ``__c_<hash>`` suffix within naming max_length."""
+    tag = hashlib.shake_128(name.encode("utf-8")).hexdigest(8)
+    suffix = f"__c_{tag}"
+    return naming.shorten_identifier(name + suffix, name, naming.max_length)
+
+
+def _flatten_struct_to_columns(
+    struct_arr: pyarrow.Array,
+    parent_prefix: str,
+    naming: NamingConvention,
+    columns_schema: Dict[str, Any],
+    _r_lvl: int,
+    existing_names: Optional[Set[str]] = None,
+    casefold_identifier: Optional[Callable[[str], str]] = None,
+) -> Tuple[Dict[str, pyarrow.Array], Dict[str, pyarrow.Field]]:
+    """Decompose a struct array into `{full_path: array}` flat columns (recursive).
+
+    Operates directly on the struct array — no intermediate table wrapping."""
+    new_columns: Dict[str, pyarrow.Array] = {}
+    column_fields: Dict[str, pyarrow.Field] = {}
+    struct_type = struct_arr.type
+
+    for field_idx, field in enumerate(struct_type):
+        norm_field_name = naming.normalize_identifier(field.name)
+        child_name = naming.shorten_fragments(parent_prefix, norm_field_name)
+
+        # per-field naming collision check — log warning if replacing existing column
+        if existing_names is not None and child_name in existing_names:
+            logger.warning(
+                f"Flattened column '{child_name}' conflicts with existing column — replacing"
+            )
+
+        child_array = pyarrow.compute.struct_field(struct_arr, [field_idx])
+
+        if pyarrow.types.is_struct(field.type):
+            if _r_lvl > 0:
+                sub_cols, sub_fields = _flatten_struct_to_columns(
+                    child_array,
+                    child_name,
+                    naming,
+                    columns_schema,
+                    _r_lvl - 1,
+                    existing_names,
+                    casefold_identifier,
+                )
+                new_columns.update(sub_cols)
+                column_fields.update(sub_fields)
+            else:
+                new_columns[child_name] = child_array
+                column_fields[child_name] = field
+        elif pyarrow.types.is_list(field.type):
+            new_columns[child_name] = child_array
+            column_fields[child_name] = field
+        else:
+            new_columns[child_name] = child_array
+            column_fields[child_name] = field
+
+    # resolve casefold collisions for case-insensitive destinations (e.g. BigQuery)
+    if casefold_identifier is not None:
+        new_columns, column_fields = _resolve_casefold_collisions(
+            new_columns, column_fields, parent_prefix, naming, casefold_identifier
+        )
+
+    return new_columns, column_fields
+
+
+def apply_arrow_path_filter(struct_arr: pyarrow.Array, paths: List[str]) -> pyarrow.Array:
+    """Extract specified dot-paths from a struct array, rebuilding a filtered struct.
+
+    Parses dot-separated paths like `"user.name"`, recurses into nested structs via
+    `pyarrow.compute.struct_field()`, and collects only the requested leaf fields.
+    Intermediate structs are rebuilt to preserve the nesting structure of the paths.
+
+    Args:
+        struct_arr: A `pyarrow.StructArray` to filter.
+        paths: Dot-separated paths (e.g. `["user.name", "user.email"]`) specifying
+            which leaf fields to retain.
+
+    Returns:
+        A new `pyarrow.StructArray` containing only the fields reachable via `paths`.
+        Fields not referenced in any path are omitted. Field nullability and metadata
+        from the original struct are preserved.
+
+    Note:
+        Only leaf-level fields are collected; intermediate struct nodes are
+        inferred from the path structure. If a path references a non-struct
+        intermediate (e.g. `"a.b"` where `a` is an `int32`), that path is
+        silently skipped.
+    """
+    pc = pyarrow.compute
+    if isinstance(struct_arr, pyarrow.ChunkedArray):
+        struct_arr = struct_arr.combine_chunks()
+    st = struct_arr.type
+
+    # group sub-paths by top-level field name
+    path_tree: Dict[str, List[str]] = {}
+    for path in paths:
+        parts = path.split(".")
+        if not parts:
+            continue
+        root = parts[0]
+        rest = parts[1:]
+        if root not in path_tree:
+            path_tree[root] = []
+        if rest:
+            path_tree[root].append(".".join(rest))
+
+    new_arrays: List[pyarrow.Array] = []
+    new_fields: List[pyarrow.Field] = []
+
+    for field_idx in range(st.num_fields):
+        field = st.field(field_idx)
+        if field.name not in path_tree:
+            continue
+
+        sub_paths = path_tree[field.name]
+        field_arr = pc.struct_field(struct_arr, field_idx)
+
+        if not sub_paths:
+            # leaf field — include as-is
+            new_arrays.append(field_arr)
+            new_fields.append(field)
+        elif pyarrow.types.is_struct(field.type):
+            # nested struct — recurse with remaining sub-paths
+            filtered_sub = apply_arrow_path_filter(field_arr, sub_paths)
+            new_arrays.append(filtered_sub)
+            new_fields.append(
+                pyarrow.field(field.name, filtered_sub.type, field.nullable, field.metadata)
+            )
+        # else: non-struct field with sub-paths — silently skip
+
+    if not new_arrays:
+        logger.warning(
+            f"apply_arrow_path_filter: no fields matched the given paths {paths}; returning"
+            " original struct unchanged"
+        )
+        return struct_arr
+
+    return pyarrow.StructArray.from_arrays(new_arrays, fields=new_fields)
+
+
+def apply_arrow_depth_limit(struct_arr: pyarrow.Array, max_depth: Optional[int]) -> pyarrow.Array:
+    """Limit struct nesting depth by serializing nested struct fields to JSON strings.
+
+    When `max_depth` is reached, struct-typed child fields are serialized to JSON
+    strings in-place, preserving the parent struct shape (matching JSON normalizer
+    `limit_depth` semantics). Scalar and list fields pass through unchanged.
+
+    Args:
+        struct_arr: A `pyarrow.StructArray` whose nesting depth to limit.
+        max_depth: Maximum nesting depth before struct children are serialized.
+            `None` means no limit (returns struct_arr unchanged).
+
+    Returns:
+        A new `pyarrow.StructArray` with the same root shape but struct-typed
+        children at the depth boundary replaced by `pyarrow.string()` columns.
+
+    Note:
+        Serializing struct children to JSON strings requires a Python roundtrip
+        via `to_pylist()` / `json.dumps()` — unavoidable for struct→JSON.
+    """
+    if max_depth is None:
+        return struct_arr
+    if max_depth == 0:
+        # serialize entire root struct to JSON string (matching JSON normalizer limit_depth(d, 0))
+        pylist = struct_arr.to_pylist()
+        json_strings = [json.dumps(row) if row is not None else None for row in pylist]
+        return pyarrow.array(json_strings, type=pyarrow.string())
+
+    pc = pyarrow.compute
+    if isinstance(struct_arr, pyarrow.ChunkedArray):
+        struct_arr = struct_arr.combine_chunks()
+    st = struct_arr.type
+
+    new_arrays: List[pyarrow.Array] = []
+    new_fields: List[pyarrow.Field] = []
+
+    for field_idx in range(st.num_fields):
+        field = st.field(field_idx)
+        field_arr = pc.struct_field(struct_arr, field_idx)
+
+        if pyarrow.types.is_struct(field.type):
+            if max_depth <= 1:
+                # at the depth boundary: serialize this struct child to JSON string
+                pylist = field_arr.to_pylist()
+                json_strings = [json.dumps(row) if row is not None else None for row in pylist]
+                new_arrays.append(pyarrow.array(json_strings, type=pyarrow.string()))
+                new_fields.append(
+                    pyarrow.field(field.name, pyarrow.string(), field.nullable, field.metadata)
+                )
+            else:
+                limited = apply_arrow_depth_limit(field_arr, max_depth - 1)
+                new_arrays.append(limited)
+                new_fields.append(
+                    pyarrow.field(field.name, limited.type, field.nullable, field.metadata)
+                )
+        else:
+            new_arrays.append(field_arr)
+            new_fields.append(field)
+
+    return pyarrow.StructArray.from_arrays(new_arrays, fields=new_fields)
+
+
+def apply_arrow_force_string(struct_arr: pyarrow.Array) -> pyarrow.Array:
+    """Coerce all leaf scalar fields in a struct array to `pyarrow.string()`.
+
+    Recurses into nested structs so that every scalar leaf is converted. List
+    fields are left entirely as-is — they become child tables during flattening,
+    not flattened scalar columns. `None` values remain `None`.
+
+    Args:
+        struct_arr: A `pyarrow.StructArray` whose scalar leaves to coerce.
+
+    Returns:
+        A new `pyarrow.StructArray` where every leaf scalar field (not struct,
+        not list) has been cast to `pyarrow.string()`. Struct fields are
+        recursively processed; list fields are preserved unchanged.
+
+    Note:
+        Uses `pyarrow.compute.cast` for the coercion, which preserves the
+        null bitmap so that null values are not converted to the string `"None"`.
+    """
+    pc = pyarrow.compute
+    if isinstance(struct_arr, pyarrow.ChunkedArray):
+        struct_arr = struct_arr.combine_chunks()
+    st = struct_arr.type
+
+    new_arrays: List[pyarrow.Array] = []
+    new_fields: List[pyarrow.Field] = []
+
+    for field_idx in range(st.num_fields):
+        field = st.field(field_idx)
+        field_arr = pc.struct_field(struct_arr, field_idx)
+
+        if pyarrow.types.is_struct(field.type):
+            coerced = apply_arrow_force_string(field_arr)
+            new_arrays.append(coerced)
+            new_fields.append(
+                pyarrow.field(field.name, coerced.type, field.nullable, field.metadata)
+            )
+        elif pyarrow.types.is_list(field.type) or pyarrow.types.is_large_list(field.type):
+            # leave lists as-is
+            new_arrays.append(field_arr)
+            new_fields.append(field)
+        else:
+            # leaf scalar — cast to string, preserving nulls
+            casted = pc.cast(field_arr, pyarrow.string())
+            new_arrays.append(casted)
+            new_fields.append(
+                pyarrow.field(field.name, pyarrow.string(), field.nullable, field.metadata)
+            )
+
+    return pyarrow.StructArray.from_arrays(new_arrays, fields=new_fields)
+
+
+def expand_arrow_json_column(
+    column: "pyarrow.Array",
+    spec: "TJsonColumnExpansionSpec",
+) -> Tuple[Optional["pyarrow.Array"], Optional["pyarrow.Table"]]:
+    """Expand a pyarrow string column containing JSON values into a flattened Arrow table.
+
+    Parses each string row as JSON, applies filter-depth-string coercion per the
+    expansion spec, and rebuilds the expanded dicts as a pyarrow table for the
+    flattening engine.
+
+    Args:
+        column: pyarrow Array or ChunkedArray of string type with JSON-encoded values.
+        spec: Column expansion specification with flatten rules, keep_original flag,
+            force_string coercion, and max_depth limit.
+
+    Returns:
+        Tuple of (original_column, expanded_table). `original_column` is the input
+        array when `spec.keep_original` is True, else None. `expanded_table` is a
+        pyarrow Table of the expanded dicts, or None when no rows contained expandable
+        JSON.
+
+    Note:
+        This function converts Arrow data to Python lists for JSON parsing, then
+        rebuilds the result via `pyarrow.Table.from_pylist`. For better performance,
+        consider casting JSON columns to STRUCT type upstream so that expansion can
+        operate directly on structured Arrow data.
+    """
+
+    # combine chunks if ChunkedArray
+    if isinstance(column, pyarrow.ChunkedArray):
+        column = column.combine_chunks()
+
+    # non-string columns: nothing to expand
+    if not (pyarrow.types.is_string(column.type) or pyarrow.types.is_large_string(column.type)):
+        return None, None
+
+    # one-time warning about the Python roundtrip cost
+    if "string" not in _warned_json_expansion:
+        _warned_json_expansion.add("string")
+        logger.warning(
+            "x-json-flatten on string column requires JSON parsing; for better performance, "
+            "cast to STRUCT upstream"
+        )
+
+    flatten_spec = spec.flatten_spec
+    keep_original = spec.keep_original
+    force_string = spec.force_string
+    max_depth = spec.max_depth
+
+    # no expansion requested
+    if not flatten_spec:
+        return (column if keep_original else None, None)
+
+    pylist = column.to_pylist()
+    expanded_dicts: List[Dict[str, Any]] = []
+
+    for val in pylist:
+        if val is None:
+            expanded_dicts.append({})
+            continue
+
+        try:
+            parsed = parse_json_value(val)
+        except Exception:
+            logger.warning("error parsing JSON value for column expansion, skipping row")
+            expanded_dicts.append({})
+            continue
+
+        if parsed is None or not isinstance(parsed, dict):
+            expanded_dicts.append({})
+            continue
+
+        expanded: Dict[str, Any] = parsed
+
+        if isinstance(flatten_spec, list):
+            expanded = filter_by_paths(expanded, flatten_spec)
+
+        if max_depth is not None:
+            expanded = limit_depth(expanded, max_depth)
+
+        if force_string:
+            expanded = apply_force_string(expanded)
+
+        expanded_dicts.append(expanded)
+
+    # union all keys across all expanded dicts to avoid from_pylist() inferring zero
+    # columns when early rows are empty (e.g., first row is None or invalid JSON)
+    all_keys: Dict[str, None] = {}
+    for d in expanded_dicts:
+        for k in d:
+            all_keys[k] = None
+    all_keys_list = list(all_keys.keys())
+
+    if not all_keys_list:
+        return (column if keep_original else None, None)
+
+    arrays: Dict[str, pyarrow.Array] = {}
+    for key in all_keys_list:
+        values = [d.get(key, None) for d in expanded_dicts]
+        arrays[key] = pyarrow.array(values)
+
+    expanded_table = pyarrow.table(arrays)
+    return (column if keep_original else None, expanded_table)

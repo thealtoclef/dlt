@@ -163,3 +163,5 @@ compiled_requirements.txt
 
 # docker folder for running tests as other OS
 tests/.docker/
+
+.omo/
