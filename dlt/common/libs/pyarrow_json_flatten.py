@@ -285,7 +285,9 @@ def _recurse_struct(
     for child_idx in range(struct_type.num_fields):
         child_field = struct_type.field(child_idx)
         child_array = pa.compute.struct_field(struct_array, [child_idx])
-        child_name = naming.shorten_fragments(parent_name, child_field.name)
+        child_name = naming.shorten_fragments(
+            parent_name, naming.normalize_identifier(child_field.name)
+        )
         if pa.types.is_struct(child_array.type):
             emitted.extend(
                 _recurse_struct(

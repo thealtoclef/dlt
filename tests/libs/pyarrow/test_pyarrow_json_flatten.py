@@ -44,6 +44,33 @@ def test_struct_full_flatten_zero_copy() -> None:
     assert "meta__a" in partial["columns"]
 
 
+def test_struct_flatten_normalizes_camelcase_child_fields() -> None:
+    """Struct sub-fields with camelCase names must be normalized before shorten_fragments
+    to avoid producing unnormalized column names like `request__cardType` instead of
+    `request__card_type`. Regression test for collision with pre-existing normalized columns.
+    """
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {"request": {"cardType": "visa", "refId": "abc", "userId": 42}},
+            {"request": {"cardType": "mc", "refId": "def", "userId": 99}},
+        ]
+    )
+    out, partial = flatten_arrow_batch(
+        batch,
+        table_name="t",
+        expansion_specs={"request": _spec()},
+        naming=_naming(),
+    )
+    names = set(out.schema.names)
+    assert names == {"request__card_type", "request__ref_id", "request__user_id"}
+    assert out.column("request__card_type").to_pylist() == ["visa", "mc"]
+    assert out.column("request__ref_id").to_pylist() == ["abc", "def"]
+    assert out.column("request__user_id").to_pylist() == [42, 99]
+    assert "request__card_type" in partial["columns"]
+    assert "request__ref_id" in partial["columns"]
+    assert "request__user_id" in partial["columns"]
+
+
 def test_struct_path_list_projection() -> None:
     batch = pa.RecordBatch.from_pylist([{"meta": {"user": {"name": "a", "email": "a@x"}, "id": 1}}])
     out, _ = flatten_arrow_batch(
