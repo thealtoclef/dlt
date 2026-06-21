@@ -38,6 +38,8 @@ class BigQueryClientConfiguration(DestinationClientDwhWithStagingConfiguration):
     """Allow BigQuery to autodetect schemas and create data tables"""
     ignore_unknown_values: bool = False
     """Ignore unknown values in the data"""
+    storage_write_max_request_bytes: int = 10 * 1024 * 1024
+    """Maximum bytes per AppendRows request to BigQuery Storage Write API"""
 
     __config_gen_annotations__: ClassVar[List[str]] = ["location"]
 
