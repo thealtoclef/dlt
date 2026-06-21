@@ -49,6 +49,7 @@ from dlt.destinations.impl.bigquery.bigquery_adapter import (
 from dlt.destinations.impl.bigquery.configuration import BigQueryClientConfiguration
 from dlt.destinations.impl.bigquery.warnings import per_column_cluster_hint_deprecated
 from dlt.destinations.impl.bigquery.sql_client import BigQuerySqlClient, BQ_TERMINAL_REASONS
+from dlt.destinations.impl.bigquery.storage_write_job import BigQueryStorageWriteJob
 from dlt.destinations.job_client_impl import SqlJobClientWithStagingDataset
 from dlt.destinations.job_impl import DestinationJsonlLoadJob, DestinationParquetLoadJob
 from dlt.destinations.job_impl import ReferenceFollowupJobRequest
@@ -251,6 +252,17 @@ class BigQueryClient(SqlJobClientWithStagingDataset, SupportsStagingDestination)
                     _streaming_load,  # type: ignore
                     [],
                     callable_requires_job_client_args=True,
+                )
+            elif insert_api == "storage_write":
+                parsed_file = ParsedLoadJobFileName.parse(file_path)
+                if parsed_file.file_format not in ["jsonl", "typed-jsonl"]:
+                    raise DestinationTerminalException(
+                        f"BigQuery Storage Write API only supports JSONL files. "
+                        f"Got `{parsed_file.file_format}` for `{file_path}`."
+                    )
+                job = BigQueryStorageWriteJob(
+                    file_path,
+                    self.config,
                 )
             else:
                 job = BigQueryLoadJob(

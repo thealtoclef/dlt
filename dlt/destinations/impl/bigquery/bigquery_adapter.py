@@ -79,7 +79,7 @@ def bigquery_adapter(
     round_half_even: TColumnNames = None,
     table_description: Optional[str] = None,
     table_expiration_datetime: Optional[str] = None,
-    insert_api: Optional[Literal["streaming", "default"]] = None,
+    insert_api: Optional[Literal["streaming", "default", "storage_write"]] = None,
     autodetect_schema: Optional[bool] = None,
     partition_expiration_days: Optional[int] = None,
 ) -> DltResource:
@@ -233,6 +233,11 @@ def bigquery_adapter(
         if insert_api == "streaming" and data.write_disposition != "append":
             raise ValueError(
                 "BigQuery streaming insert only accepts `write_disposition='append'`. "
+                f"Received `write_disposition={data.write_disposition}`."
+            )
+        if insert_api == "storage_write" and data.write_disposition != "append":
+            raise ValueError(
+                "BigQuery Storage Write API only accepts `write_disposition='append'`. "
                 f"Received `write_disposition={data.write_disposition}`."
             )
         additional_table_hints["x-insert-api"] = insert_api

@@ -2480,6 +2480,7 @@ bigquery = [
     { name = "db-dtypes" },
     { name = "gcsfs" },
     { name = "google-cloud-bigquery" },
+    { name = "google-cloud-bigquery-storage" },
     { name = "grpcio" },
     { name = "pyarrow", version = "21.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pyarrow", version = "23.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -2538,6 +2539,7 @@ gcp = [
     { name = "db-dtypes" },
     { name = "gcsfs" },
     { name = "google-cloud-bigquery" },
+    { name = "google-cloud-bigquery-storage" },
     { name = "grpcio" },
 ]
 gs = [
@@ -2788,6 +2790,8 @@ requires-dist = [
     { name = "giturlparse", specifier = ">=0.10.0" },
     { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = ">=2.26.0" },
     { name = "google-cloud-bigquery", marker = "extra == 'gcp'", specifier = ">=2.26.0" },
+    { name = "google-cloud-bigquery-storage", marker = "extra == 'bigquery'", specifier = ">=2.32.0" },
+    { name = "google-cloud-bigquery-storage", marker = "extra == 'gcp'", specifier = ">=2.32.0" },
     { name = "grpcio", marker = "extra == 'bigquery'", specifier = ">=1.50.0" },
     { name = "grpcio", marker = "extra == 'gcp'", specifier = ">=1.50.0" },
     { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=1.4.1" },
@@ -3819,10 +3823,10 @@ name = "google-cloud-bigquery-storage"
 version = "2.32.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "google-api-core", extra = ["grpc"], marker = "python_full_version >= '3.10'" },
-    { name = "google-auth", marker = "python_full_version >= '3.10'" },
-    { name = "proto-plus", marker = "python_full_version >= '3.10'" },
-    { name = "protobuf", marker = "python_full_version >= '3.10'" },
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ec/8f/b1050c6d62fcbb74217e8538961a912bedd5703311776ed4e146f49d7ac6/google_cloud_bigquery_storage-2.32.0.tar.gz", hash = "sha256:e944f5f4385f0be27e049e73e4dccf548b77348301663a773b5d03abdbd49e20", size = 294676, upload-time = "2025-05-28T22:11:16.598Z" }
 wheels = [
