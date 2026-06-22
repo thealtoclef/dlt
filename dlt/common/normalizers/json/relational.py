@@ -30,6 +30,7 @@ from dlt.common.schema.typing import (
     C_DLT_LOAD_ID,
     TColumnName,
     TSimpleRegex,
+    TTableSchema,
 )
 from dlt.common.schema.utils import (
     column_name_validator,
@@ -55,6 +56,14 @@ from dlt.common.normalizers.json.helpers import (
 )
 from dlt.common.normalizers.json.expansion import expand_json_column
 from dlt.common.validation import validate_dict
+
+
+def _in_flatten_descendant(table_schema: Optional[TTableSchema], path: Tuple[str, ...]) -> bool:
+    """Check if the current path is inside an x-json-flatten column subtree."""
+    if not table_schema or not path:
+        return False
+    root_col = table_schema["columns"].get(path[0])  # type: ignore[index]
+    return root_col is not None and bool(root_col.get("x-json-flatten"))
 
 
 class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
@@ -168,6 +177,8 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         is_nested_type = self._is_nested_type
         EMPTY_KEY = self.EMPTY_KEY_IDENTIFIER
 
+        table_schema = self.schema.tables.get(table)
+
         stack: List[Tuple[Dict[str, Any], int, Tuple[str, ...]]] = [(dict_row, _r_lvl, ())]
 
         while stack:
@@ -177,7 +188,10 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
                 nested_name = norm_k if not path else shorten_fragments(*path, norm_k)
                 v_type = type(v)
                 if v_type is dict:
-                    if not is_nested_type(table, nested_name, r_lvl):
+                    # Bypass max_table_nesting for sub-fields of x-json-flatten columns
+                    if not is_nested_type(table, nested_name, r_lvl) or (
+                        r_lvl <= 0 and _in_flatten_descendant(table_schema, path)
+                    ):
                         stack.append((v, r_lvl - 1, path + (norm_k,)))
                         continue
                 elif v_type is list:
@@ -502,7 +516,7 @@ class DataItemNormalizer(DataItemNormalizerBase[RelationalNormalizerConfig]):
         """Normalizes all known column identifiers according to the schema and then validates the configuration"""
 
         def _normalize_prop(
-            mapping: Mapping[TColumnName, TColumnName]
+            mapping: Mapping[TColumnName, TColumnName],
         ) -> Dict[TColumnName, TColumnName]:
             return {
                 TColumnName(schema.naming.normalize_path(from_col)): TColumnName(

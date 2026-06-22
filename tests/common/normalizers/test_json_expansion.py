@@ -947,3 +947,85 @@ def test_flatten_respects_max_table_nesting(norm: RelationalNormalizer) -> None:
     assert table_name == "test_table"
     assert row["data__leaf"] == "value"
     assert "data" not in row
+
+
+def test_flatten_deep_nested_with_max_table_nesting_zero(norm: RelationalNormalizer) -> None:
+    """x-json-flatten bypasses max_table_nesting=0 for full-depth expansion of sub-fields."""
+    from dlt.common.normalizers.json.relational import DataItemNormalizer as RelationalNormalizer
+
+    norm.schema.update_table(
+        new_table(
+            "test_table",
+            columns=[
+                {"name": "id", "data_type": "bigint"},
+                {"name": "metadata", "data_type": "text", "x-json-flatten": True},
+            ],
+        )
+    )
+    norm._reset()
+
+    # Set per-table max_nesting=0 on the table to override the normalizer default
+    table = norm.schema.get_table("test_table")
+    table.setdefault("x-normalizer", {})["max_nesting"] = 0  # type: ignore[index]
+
+    rows = list(
+        norm.normalize_data_item(
+            {
+                "id": 1,
+                "metadata": '{"user": {"profile": {"name": {"first": "John"}, "age": 30}}}',
+            },
+            "load_id",
+            "test_table",
+        )
+    )
+
+    assert len(rows) == 1
+    row = rows[0][1]
+
+    # All levels of the parsed JSON must be flattened despite max_table_nesting=0
+    assert row["id"] == 1
+    assert row["metadata__user__profile__name__first"] == "John"
+    assert row["metadata__user__profile__age"] == 30
+    assert "metadata" not in row
+
+
+def test_flatten_deep_nested_with_keep_original_and_max_table_nesting_zero(
+    norm: RelationalNormalizer,
+) -> None:
+    """x-json-flatten + keep_original + max_table_nesting=0: all three compose correctly."""
+    norm.schema.update_table(
+        new_table(
+            "test_table",
+            columns=[
+                {"name": "id", "data_type": "bigint"},
+                {
+                    "name": "metadata",
+                    "data_type": "text",
+                    "x-json-flatten": True,
+                    "x-json-keep-original": True,
+                },
+            ],
+        )
+    )
+    norm._reset()
+
+    table = norm.schema.get_table("test_table")
+    table.setdefault("x-normalizer", {})["max_nesting"] = 0  # type: ignore[index]
+
+    rows = list(
+        norm.normalize_data_item(
+            {
+                "id": 2,
+                "metadata": '{"user": {"name": "Alice"}}',
+            },
+            "load_id",
+            "test_table",
+        )
+    )
+
+    assert len(rows) == 1
+    row = rows[0][1]
+
+    assert row["id"] == 2
+    assert row["metadata"] == '{"user": {"name": "Alice"}}'
+    assert row["metadata__user__name"] == "Alice"
