@@ -6,6 +6,7 @@ import pytest
 from google.cloud.bigquery import SchemaField
 from google.protobuf import descriptor_pb2
 
+from dlt.common.json import json
 from dlt.destinations.impl.bigquery.storage_write_job import (
     bq_schema_to_proto_class,
     build_field_types,
@@ -224,6 +225,31 @@ def test_serialize_row_non_primitive_coerced() -> None:
     dt = datetime(2026, 6, 21, 10, 30, 0)
     msg = _deserialize(serialize_row({"ts": dt}, proto_cls, fc), proto_cls)
     assert msg.ts != ""  # str() representation
+
+
+def test_serialize_row_dict_on_string_field() -> None:
+    """Dict values on STRING/JSON columns are JSON-serialized."""
+    proto_cls, fc = _make_proto([SchemaField("metadata", "STRING")])
+    payload = {"key": "value", "count": 1}
+    msg = _deserialize(serialize_row({"metadata": payload}, proto_cls, fc), proto_cls)
+    assert msg.metadata == json.dumps(payload)
+
+
+def test_serialize_row_list_on_string_field() -> None:
+    """List values on STRING/JSON columns are JSON-serialized."""
+    proto_cls, fc = _make_proto([SchemaField("tags", "JSON")])
+    payload = ["a", "b"]
+    msg = _deserialize(serialize_row({"tags": payload}, proto_cls, fc), proto_cls)
+    assert msg.tags == json.dumps(payload)
+
+
+def test_serialize_row_int_on_string_field() -> None:
+    """Int values on STRING columns are coerced to str (not passed as int proto)."""
+    proto_cls, fc = _make_proto([SchemaField("pending_status", "STRING")])
+    msg = _deserialize(serialize_row({"pending_status": 0}, proto_cls, fc), proto_cls)
+    assert msg.pending_status == "0"
+    msg = _deserialize(serialize_row({"pending_status": 1}, proto_cls, fc), proto_cls)
+    assert msg.pending_status == "1"
 
 
 # ---------------------------------------------------------------------------

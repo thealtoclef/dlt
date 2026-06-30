@@ -1,7 +1,4 @@
-"""Integration test for BigQuery Storage Write API in dlt.
-
-Run against cake-data-non-production project.
-"""
+"""Integration test for BigQuery Storage Write API in dlt."""
 import time
 
 import dlt

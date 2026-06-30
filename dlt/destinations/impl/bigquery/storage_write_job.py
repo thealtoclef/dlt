@@ -119,8 +119,9 @@ def _parse_str_value(value: str, proto_type: int) -> Any:
 def serialize_row(row: DictStrAny, proto_class: Type[Any], field_types: Dict[str, int]) -> bytes:
     """Serializes a single row dict to protobuf bytes.
 
-    None values are skipped (proto2 default). String values for non-string types are
-    coerced. Unknown fields are silently ignored.
+    None values are skipped (proto2 default). Non-string values on STRING proto fields
+    are JSON-serialized (dict/list) or coerced with str(). String values for non-string
+    proto types are parsed. Unknown fields are silently ignored.
     """
     msg = proto_class()
     for key, value in row.items():
@@ -129,7 +130,12 @@ def serialize_row(row: DictStrAny, proto_class: Type[Any], field_types: Dict[str
         proto_type = field_types.get(key)
         if proto_type is None:
             continue
-        if not isinstance(value, (str, int, float, bool)):
+        if proto_type == _TYPE_STRING and not isinstance(value, str):
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            else:
+                value = str(value)
+        elif not isinstance(value, (str, int, float, bool)):
             value = str(value)
         if isinstance(value, str) and proto_type != _TYPE_STRING:
             value = _parse_str_value(value, proto_type)

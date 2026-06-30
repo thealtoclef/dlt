@@ -1,7 +1,4 @@
-"""Integration test for BigQuery Storage Write API — all data types.
-
-Run against cake-data-non-production project.
-"""
+"""Integration test for BigQuery Storage Write API — all data types."""
 import base64
 import time
 from datetime import date, datetime, time as dtime, timezone
