@@ -16,6 +16,7 @@ def with_json_flatten(
     keep_original: bool = False,
     force_string: bool = False,
     max_depth: Optional[int] = None,
+    schema_inference: Optional[Union[str, int]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Creates column hints for JSON string expansion.
 
@@ -33,6 +34,12 @@ def with_json_flatten(
         max_depth (Optional[int]): Maximum nesting levels to expand. Dicts at or beyond
             this depth are serialised to a JSON string instead of being further flattened.
             `None` means unlimited (default dlt behaviour).
+        schema_inference (Optional[Union[str, int]]): Schema inference mode for string
+            JSON columns on the Arrow normalize path. `"incremental"` (default) discovers
+            new keys batch by batch and matches the row-by-row JSON path semantics.
+            `"full-scan"` pre-scans the column to lock a union schema before flattening.
+            An `int` is interpreted as a fixed sample size (may miss late-appearing keys).
+            Has no effect on the row-by-row JSON path.
 
     Returns:
         Dict[str, Dict[str, Any]]: Column hints dict with `x-json-flatten` and
@@ -60,6 +67,8 @@ def with_json_flatten(
             col_hints["x-json-flatten-force-string"] = force_string
         if max_depth is not None:
             col_hints["x-json-flatten-max-depth"] = max_depth
+        if schema_inference is not None:
+            col_hints["x-json-flatten-schema-inference"] = schema_inference
         hints[col] = col_hints
     return hints
 

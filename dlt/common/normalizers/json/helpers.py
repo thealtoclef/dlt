@@ -36,6 +36,7 @@ class TJsonColumnExpansionSpec(NamedTuple):
     keep_original: bool
     force_string: bool
     max_depth: Optional[int]
+    schema_inference: Optional[Union[str, int]]
 
 
 def shorten_fragments(naming: NamingConvention, *idents: str) -> str:
@@ -189,9 +190,10 @@ def get_json_expansion_columns(
         keep_original: bool = bool(col.get("x-json-keep-original"))
         force_string: bool = bool(col.get("x-json-flatten-force-string"))
         max_depth: Optional[int] = col.get("x-json-flatten-max-depth")
+        schema_inference: Optional[Union[str, int]] = col.get("x-json-flatten-schema-inference")
         if flatten_spec or keep_original:
             result[col_name] = TJsonColumnExpansionSpec(
-                flatten_spec, keep_original, force_string, max_depth
+                flatten_spec, keep_original, force_string, max_depth, schema_inference
             )
     return result
 

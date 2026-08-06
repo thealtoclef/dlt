@@ -20,6 +20,19 @@ class ItemsNormalizerConfiguration(BaseConfiguration):
 
 
 @configspec
+class ArrowNormalizerConfiguration(BaseConfiguration):
+    json_engine: str = "pyarrow"
+    """Engine used to flatten JSON-hinted columns on the Arrow path. `pyarrow` (default)
+    uses native arrow projection; `duckdb` enables vectorized string-JSON parsing and
+    struct-to-JSON serialization for the opt-in `keep_original` / `max_depth` divergences
+    on struct inputs."""
+    duckdb_memory_limit: str = "2GB"
+    """Memory limit applied to the per-worker DuckDB connection (only used when `json_engine='duckdb'`)."""
+    duckdb_threads: int = 1
+    """Thread count applied to the per-worker DuckDB connection (only used when `json_engine='duckdb'`)."""
+
+
+@configspec
 class NormalizeConfiguration(PoolRunnerConfiguration):
     pool_type: TPoolType = "process"
     destination_capabilities: DestinationCapabilitiesContext = None  # injectable
@@ -38,6 +51,8 @@ class NormalizeConfiguration(PoolRunnerConfiguration):
     model_normalizer: ItemsNormalizerConfiguration = ItemsNormalizerConfiguration(
         add_dlt_id=False, add_dlt_load_id=True
     )
+
+    arrow_normalizer: ArrowNormalizerConfiguration = ArrowNormalizerConfiguration()
 
     def on_resolved(self) -> None:
         self.pool_type = "none" if self.workers == 1 else "process"
